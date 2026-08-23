@@ -1,0 +1,12 @@
+Dockerfile
+.dockerignore
+*.md
+.gitignore
+.env*
+.github/
+.git/
+LICENSE
+llms.txt
+client-secret
+*.key
+*.pem

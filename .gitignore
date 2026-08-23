@@ -1,0 +1,28 @@
+# Build output
+/out/
+/auth-proxy
+/dist/
+
+# Test binaries (go test -c) and coverage
+*.test
+coverage.out
+*.prof
+
+# Credentials — NEVER commit a real client secret or key material
+client-secret
+*.key
+*.pem
+
+# Delve debugger output
+__debug_bin*
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Environment variables
+.env*
+!.env*.example

@@ -1,0 +1,57 @@
+# registry-auth-proxy
+
+> A stateless, dependency-free Go reverse proxy that lets joxit/docker-registry-ui
+> browse a token-authenticated CNCF Distribution registry without a login dialog. It
+> holds one read-only machine identity (registry-browser) and performs the Bearer token
+> dance transparently for every request. Runs on `scratch` as non-root UID 65534.
+
+## Purpose
+
+- Front joxit for a Distribution registry that requires Bearer token auth.
+- Remove joxit's credential prompt by owning authentication: predict scope, fetch/cache
+  tokens from the registry token service, inject Bearer headers, retry on challenge.
+- Never let the UI see a 401 (which would trigger its login dialog).
+
+## Endpoints
+
+- `GET /healthz` — returns `200 {"status":"ok"}`.
+- `*` (any other path) — reverse-proxied to `UPSTREAM_URL` with transparent Bearer auth.
+- CLI: `-healthcheck` dials `/healthz` and exits 0/1 (container HEALTHCHECK).
+
+## Configuration (environment variables)
+
+- `PORT` (default 8181)
+- `UPSTREAM_URL` (required) — Distribution registry base URL
+- `TOKEN_ENDPOINT` (required) — token service GET /token URL (internal)
+- `CLIENT_ID` (default registry-browser) — Hydra client_id for Basic auth
+- `CLIENT_SECRET_FILE` (required) — file with the client secret; never an inline env var
+- `TOKEN_REFRESH_MARGIN` (default 30s) — evict cached tokens this early before expiry
+- `LOG_LEVEL` (default info)
+
+## Request flow
+
+- Predict OCI scope from URL path (catalog / repository:*:pull).
+- Cache hit → forward with cached token. Miss → probe unauthenticated.
+- Non-401 → stream back. 401 → parse challenge, fetch token, cache, retry with Bearer.
+- Still 401 with a token attached → remap to 403 (no login dialog).
+
+## Security invariants
+
+- Client secret file-only, never logged; Bearer tokens never logged.
+- Fail closed: token-fetch error → 502, never a naked 401.
+- Inbound Authorization headers stripped; hop-by-hop headers stripped both directions.
+- Read-only identity: only pull/catalog scopes predicted or requested.
+- Response bodies streamed, never fully buffered.
+
+## Supply chain
+
+- Multi-arch images (amd64/arm64) on quay.io + Docker Hub.
+- SBOM (SPDX) + SLSA provenance attached; keyless cosign signatures over the digest.
+- Base image pinned by digest; reproducible build; standard library only (no deps).
+
+## Links
+
+- Source: https://github.com/meddleware-org/registry-auth-proxy
+- Token service: https://github.com/meddleware-org/registry-token-service
+- Registry token auth spec: https://distribution.github.io/distribution/spec/auth/token/
+- Security policy: SECURITY.md
