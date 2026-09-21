@@ -26,12 +26,45 @@ func TestPredictScope(t *testing.T) {
 		{"unknown v2 subpath", "/v2/foo/wat", ""},
 		{"non-v2", "/healthz", ""},
 		{"root", "/", ""},
+		// F2: traversal must not desync the predicted scope. A crafted ".." path predicts no
+		// scope (fail-safe) rather than a confused "repository:foo/manifests/../../bar:pull".
+		{"traversal predicts no scope", "/v2/foo/manifests/../../bar/manifests/latest", ""},
+		// A clean path with collapsible segments still predicts the canonical scope.
+		{"double slash normalised", "/v2//foo/tags/list", "repository:foo:pull"},
+		{"dot segment normalised", "/v2/foo/./tags/list", "repository:foo:pull"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := PredictScope(tt.path); got != tt.want {
 				t.Errorf("PredictScope(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizePath(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		wantClean string
+		wantOK    bool
+	}{
+		{"clean tags path", "/v2/foo/tags/list", "/v2/foo/tags/list", true},
+		{"ping", "/v2/", "/v2", true},
+		{"double slash collapses", "/v2//foo/tags/list", "/v2/foo/tags/list", true},
+		{"dot segment collapses", "/v2/foo/./tags/list", "/v2/foo/tags/list", true},
+		{"parent traversal rejected", "/v2/foo/manifests/../../bar/manifests/latest", "/v2/bar/manifests/latest", false},
+		{"leading traversal rejected", "/v2/../secret", "/secret", false},
+		{"non-v2 clean path ok", "/healthz", "/healthz", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clean, ok := NormalizePath(tt.path)
+			if clean != tt.wantClean || ok != tt.wantOK {
+				t.Errorf("NormalizePath(%q) = (%q, %v), want (%q, %v)",
+					tt.path, clean, ok, tt.wantClean, tt.wantOK)
 			}
 		})
 	}

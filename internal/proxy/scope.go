@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"path"
 	"regexp"
 	"strings"
 )
@@ -44,16 +45,46 @@ var scopeRules = []struct {
 	},
 }
 
+// NormalizePath cleans a request path and reports whether it is a safe, in-bounds registry
+// path. ok is false when the raw path contains a parent-directory traversal ("..") segment or,
+// after cleaning, a /v2 request escapes the /v2 API root — a read-only registry browser never
+// needs either, and both would otherwise let a crafted path desync the predicted scope (and its
+// cache key) from the path actually forwarded upstream. net/http has already percent-decoded
+// r.URL.Path, so an encoded `%2E%2E` traversal is visible here as "..".
+//
+// Defence-in-depth only: the token service remains the real authority and the browser identity is
+// read-only, so a mispredicted scope could never escalate — this just removes the cache-confusion
+// surface (audit F2).
+func NormalizePath(p string) (clean string, ok bool) {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return path.Clean(p), false
+		}
+	}
+	clean = path.Clean(p)
+	// A /v2… request must still live under /v2 after cleaning.
+	if strings.HasPrefix(p, "/v2") && clean != "/v2" && !strings.HasPrefix(clean, "/v2/") {
+		return clean, false
+	}
+	return clean, true
+}
+
 // PredictScope returns the expected OCI scope string for a given URL path.
 // Returns an empty string for /v2/ (ping) and any unrecognised paths.
 // The empty string is a valid cache key: a no-scope token satisfies /v2/ pings.
-func PredictScope(path string) string {
-	path = strings.TrimRight(path, "/")
-	if path == "/v2" {
+// The path is normalised first so `.`/`..`/`//` segments cannot desync the cache key; a path that
+// fails normalisation (traversal) predicts no scope (fail-safe — the handler rejects it outright).
+func PredictScope(p string) string {
+	clean, ok := NormalizePath(p)
+	if !ok {
+		return ""
+	}
+	clean = strings.TrimRight(clean, "/")
+	if clean == "/v2" {
 		return "" // no scope needed for the ping endpoint
 	}
 	for _, rule := range scopeRules {
-		if m := rule.re.FindStringSubmatch(path); m != nil {
+		if m := rule.re.FindStringSubmatch(clean); m != nil {
 			return rule.scope(m)
 		}
 	}

@@ -37,12 +37,16 @@ func NewCache(margin time.Duration) *Cache {
 }
 
 // Get returns the cached token for the given scope, or ("", false) if absent
-// or within the refresh margin of expiry. Safe for concurrent use.
+// or within the refresh margin of expiry. Expired entries are deleted on miss
+// to prevent unbounded map growth. Safe for concurrent use.
 func (c *Cache) Get(scope string) (string, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	e, ok := c.entries[scope]
 	if !ok || time.Now().After(e.expiresAt) {
+		if ok {
+			delete(c.entries, scope)
+		}
 		return "", false
 	}
 	return e.token, true

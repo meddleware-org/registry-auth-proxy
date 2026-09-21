@@ -85,7 +85,15 @@ func NewHandler(upstreamURL string, cache *token.Cache, fetcher *token.Fetcher) 
 		upstream: u,
 		cache:    cache,
 		fetcher:  fetcher,
-		client:   &http.Client{}, // no global timeout; per-request context controls deadline
+		client: &http.Client{
+			// no global timeout; per-request context controls deadline
+			// Do not follow upstream redirects: the registry is trusted and does not 3xx on the
+			// proxied paths, so an unexpected redirect is returned verbatim (and remapped like any
+			// other status) rather than silently followed to an attacker-influenced Location.
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -109,6 +117,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		bodyBytes = b
+	}
+
+	// Reject parent-directory traversal / out-of-bounds paths outright (defence-in-depth, F2).
+	// joxit is read-only and only ever requests canonical /v2 paths, so a ".." segment is always
+	// malformed; rejecting here keeps the predicted scope (and its cache key) honest.
+	if _, ok := NormalizePath(r.URL.Path); !ok {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
 	}
 
 	predictedScope := PredictScope(r.URL.Path)

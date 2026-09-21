@@ -187,3 +187,33 @@ func TestServeHTTP_CacheHit(t *testing.T) {
 		t.Errorf("unauthenticated probes = %d, want 1 (subsequent requests should hit the cache)", probes)
 	}
 }
+
+// TestServeHTTP_DoesNotFollowUpstreamRedirect verifies the handler returns an upstream 3xx verbatim
+// instead of following its Location (CheckRedirect → http.ErrUseLastResponse). The registry does not
+// redirect on proxied paths, so an unexpected redirect must never be chased to another origin.
+func TestServeHTTP_DoesNotFollowUpstreamRedirect(t *testing.T) {
+	var evilHit bool
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		evilHit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer evil.Close()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", evil.URL)
+		w.WriteHeader(http.StatusFound) // 302
+	}))
+	defer upstream.Close()
+
+	h := newTestHandler(t, upstream.URL, "any-token")
+	req := httptest.NewRequest(http.MethodGet, "/v2/foo/tags/list", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (redirect returned verbatim, not followed)", rec.Code)
+	}
+	if evilHit {
+		t.Fatal("handler followed the upstream redirect — CheckRedirect not enforced")
+	}
+}

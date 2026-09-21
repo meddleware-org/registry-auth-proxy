@@ -7,6 +7,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -64,6 +65,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
 
+	// Fail fast on a malformed outbound URL rather than surfacing an opaque request error at
+	// runtime. Both endpoints are in-cluster ClusterIP services over http, so `http` is allowed;
+	// only unparseable, schemeless/host-less, or non-http(s) values are rejected.
+	if err := validateHTTPURL("UPSTREAM_URL", cfg.UpstreamURL); err != nil {
+		return nil, err
+	}
+	if err := validateHTTPURL("TOKEN_ENDPOINT", cfg.TokenEndpoint); err != nil {
+		return nil, err
+	}
+
 	raw, err := os.ReadFile(secretFile)
 	if err != nil {
 		return nil, fmt.Errorf("read CLIENT_SECRET_FILE %q: %w", secretFile, err)
@@ -84,4 +95,20 @@ func Load() (*Config, error) {
 	cfg.UpstreamURL = strings.TrimRight(cfg.UpstreamURL, "/")
 
 	return cfg, nil
+}
+
+// validateHTTPURL rejects a value that is not a well-formed http(s) URL with a host. It does not
+// require https: both configured endpoints are in-cluster ClusterIP services reached over http.
+func validateHTTPURL(name, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid %s %q: %w", name, raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s must be an http(s) URL, got scheme %q in %q", name, u.Scheme, raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s must include a host: %q", name, raw)
+	}
+	return nil
 }

@@ -43,3 +43,18 @@ func TestCacheEmptyScopeKey(t *testing.T) {
 		t.Fatalf("Get(\"\") = (%q, %v), want (%q, true)", got, ok, "ping-tok")
 	}
 }
+
+func TestCacheExpiredEntryDeleted(t *testing.T) {
+	// Expired entries must be deleted from the map on Get miss to prevent unbounded growth.
+	c := NewCache(1 * time.Minute) // margin > lifetime → always expired
+	c.Set("s", "tok", time.Now().Add(10*time.Second))
+	if len(c.entries) != 1 {
+		t.Fatalf("expected 1 entry after Set, got %d", len(c.entries))
+	}
+	if _, ok := c.Get("s"); ok {
+		t.Fatal("expected miss on expired entry")
+	}
+	if len(c.entries) != 0 {
+		t.Fatalf("expected 0 entries after Get miss on expired entry, got %d", len(c.entries))
+	}
+}
