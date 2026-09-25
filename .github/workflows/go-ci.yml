@@ -1,4 +1,4 @@
-name: CI
+name: Go CI
 
 # Continuous integration gate for registry-auth-proxy. Runs on every push and PR.
 # The publish workflow fires only on version tags; keeping this green before
@@ -74,3 +74,4 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          version: v0.74.0
