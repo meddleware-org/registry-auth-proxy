@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// defaultExpiresIn is the token lifetime the Distribution spec assumes when expires_in is absent.
+const defaultExpiresIn = 60
+
 // tokenResponse is the JSON body returned by the registry token service, per the
 // Distribution token auth spec. IssuedAt is RFC 3339; ExpiresIn is seconds.
 type tokenResponse struct {
@@ -77,15 +80,20 @@ func (f *Fetcher) Fetch(ctx context.Context, service, scope string) (tok string,
 		return "", time.Time{}, fmt.Errorf("token endpoint returned empty token")
 	}
 
-	// Compute absolute expiry from the issue time + lifetime.
-	// Fallback to now + expires_in if the issued_at field is missing or unparseable.
+	// Absolute expiry = issue time + lifetime. The issue time is the earlier of issued_at and the
+	// local clock, so a token service whose clock runs ahead cannot make a token look valid longer
+	// than it is. A missing or non-positive expires_in means 60 s (Distribution token spec).
 	issuedAt := time.Now()
 	if tr.IssuedAt != "" {
-		if t, parseErr := time.Parse(time.RFC3339, tr.IssuedAt); parseErr == nil {
+		if t, parseErr := time.Parse(time.RFC3339, tr.IssuedAt); parseErr == nil && t.Before(issuedAt) {
 			issuedAt = t
 		}
 	}
-	expiry = issuedAt.Add(time.Duration(tr.ExpiresIn) * time.Second)
+	lifetime := tr.ExpiresIn
+	if lifetime <= 0 {
+		lifetime = defaultExpiresIn
+	}
+	expiry = issuedAt.Add(time.Duration(lifetime) * time.Second)
 
 	return tr.Token, expiry, nil
 }

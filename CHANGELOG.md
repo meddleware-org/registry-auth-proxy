@@ -5,6 +5,20 @@ All notable changes to registry-auth-proxy are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-10-03
+
+### Fixed
+
+- Token expiry: a missing or non-positive `expires_in` now means 60 s (Distribution token spec)
+  instead of 0, and the issue time is the earlier of `issued_at` and the local clock, so a token
+  service whose clock runs ahead cannot keep a token cached past its real expiry.
+
+### Added
+
+- Tests for the token fetcher (credentials and query, fail-closed answers, 64 KiB cap, expiry rules)
+  and for the handler's 502-on-token-failure and 32 MiB body cap.
+- CI pins `govulncheck` (v1.8.0).
+
 ## [Unreleased]
 
 ### Added

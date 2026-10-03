@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,5 +216,50 @@ func TestServeHTTP_DoesNotFollowUpstreamRedirect(t *testing.T) {
 	}
 	if evilHit {
 		t.Fatal("handler followed the upstream redirect — CheckRedirect not enforced")
+	}
+}
+
+// TestServeHTTP_TokenFailureIsBadGateway verifies the fail-closed path: when the token
+// service refuses, the client gets 502 — never the upstream's 401, which would make the
+// browser UI prompt for a login — and the upstream is not retried without a token.
+func TestServeHTTP_TokenFailureIsBadGateway(t *testing.T) {
+	probes := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		probes++
+		w.Header().Set("WWW-Authenticate", `Bearer realm="https://token.example.com/token",service="reg",scope="repository:foo:pull"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer tokenSrv.Close()
+
+	h := NewHandler(upstream.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "registry-browser", "secret"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/foo/tags/list", nil))
+
+	if rec.Code != http.StatusBadGateway || rec.Header().Get("WWW-Authenticate") != "" {
+		t.Errorf("status = %d, WWW-Authenticate = %q; want 502 without a challenge", rec.Code, rec.Header().Get("WWW-Authenticate"))
+	}
+	if probes != 1 {
+		t.Errorf("upstream called %d times, want only the probe", probes)
+	}
+}
+
+// TestServeHTTP_BodyCap verifies a request body over 32 MiB is refused with 413 before
+// anything is sent upstream.
+func TestServeHTTP_BodyCap(t *testing.T) {
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	defer upstream.Close()
+
+	h := newTestHandler(t, upstream.URL, "tok")
+	body := strings.NewReader(strings.Repeat("x", maxBodyBytes+1))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v2/foo/blobs/uploads/x", body))
+
+	if rec.Code != http.StatusRequestEntityTooLarge || called {
+		t.Errorf("status = %d, upstream called = %v; want 413 and no upstream call", rec.Code, called)
 	}
 }
