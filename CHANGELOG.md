@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and for the handler's 502-on-token-failure and 32 MiB body cap.
 - CI pins `govulncheck` (v1.8.0).
 
-## [Unreleased]
+## [0.1.0] - 2026-08-23
 
 ### Added
 - Initial pre-authenticating reverse proxy for the CNCF Distribution registry: predicts
