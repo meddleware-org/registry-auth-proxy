@@ -37,10 +37,15 @@ scope and treated as high severity:
 3. **Inbound Authorization is stripped.** Client-supplied `Authorization` headers (e.g.
    stale credentials from joxit `localStorage`) are removed before forwarding; the proxy
    attaches only tokens it fetched itself.
-4. **Read-only identity.** The proxy predicts and requests only `pull` and `catalog`
-   scopes. A request that is still `401` after a valid token is attached is remapped to
-   `403` — authenticated but not authorized — never escalated.
-5. **No request/response body tampering.** Bodies are streamed verbatim; hop-by-hop
+4. **Read-only.** Only `GET` and `HEAD` are forwarded (others are `405`), and no request
+   body is forwarded. The proxy predicts and requests only `pull` and `catalog` scopes: a
+   challenge for any other scope is answered `403` without calling the token service. A
+   request that is still `401` after a valid token is attached is remapped to `403` —
+   authenticated but not authorized — and the refused token is dropped, never escalated.
+5. **Tokens are cached only under the scope they were issued for,** in a cache bounded to
+   512 entries, so one path can never be served a token issued for another resource and
+   a client enumerating repository names cannot grow memory without bound.
+6. **No response body tampering.** Response bodies are streamed verbatim; hop-by-hop
    headers (RFC 7230 §6.1) are the only headers removed in transit.
 
 ## Supported versions

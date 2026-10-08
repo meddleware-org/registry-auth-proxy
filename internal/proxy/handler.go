@@ -26,24 +26,24 @@
 //
 // Hop-by-hop headers (RFC 7230 §6.1) are stripped in both directions so the
 // proxied response is well-formed for joxit's nginx.
+//
+// The proxy is read-only by construction: only GET and HEAD are forwarded (anything else is 405
+// before any token is requested), no request body is forwarded, and a token is requested only for
+// pull and catalog scopes (see scope.go and challenge.go). A token is cached under exactly the scope
+// it was issued for, never under a predicted alias.
 package proxy
 
 import (
-	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/meddleware-org/registry-auth-proxy/internal/token"
 )
-
-// maxBodyBytes bounds how much of a request body the proxy buffers so it can be
-// replayed on the post-401 retry. joxit is read-only and never uploads blobs, so
-// this is a safety ceiling rather than a functional limit. It must not be raised
-// without operator review (see CLAUDE.md).
-const maxBodyBytes = 32 << 20 // 32 MiB
 
 // hopByHopHeaders are connection-scoped headers that must not be forwarded by an
 // intermediary (RFC 7230 §6.1). Copying these upstream→client (notably
@@ -69,6 +69,7 @@ type Handler struct {
 	upstream *url.URL
 	cache    *token.Cache
 	fetcher  *token.Fetcher
+	flight   token.Flight
 	client   *http.Client
 }
 
@@ -101,22 +102,12 @@ func NewHandler(upstreamURL string, cache *token.Cache, fetcher *token.Fetcher) 
 // 401 → fetch → cache → retry) flow described in the package comment and streams
 // the final response to w.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Buffer the body so it can be replayed on retry. GET/HEAD have no body;
-	// PUT/POST (push paths) may have large blobs, so the 32 MiB cap is a
-	// safety bound — joxit is read-only and will never push blobs.
-	var bodyBytes []byte
-	if r.Body != nil && r.Body != http.NoBody {
-		lr := io.LimitReader(r.Body, int64(maxBodyBytes)+1)
-		b, err := io.ReadAll(lr)
-		if err != nil {
-			http.Error(w, "read error", http.StatusBadGateway)
-			return
-		}
-		if len(b) > maxBodyBytes {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		bodyBytes = b
+	// Read-only: the browser UI only ever reads. Refuse everything else before touching the
+	// token service, so a push or delete can never cause a token to be requested or cached.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
 	// Reject parent-directory traversal / out-of-bounds paths outright (defence-in-depth, F2).
@@ -132,12 +123,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Cache hit: inject token and forward directly.
 	if tok, ok := h.cache.Get(predictedScope); ok {
 		slog.Debug("cache hit", "scope", predictedScope)
-		h.proxyWithToken(w, r, bodyBytes, tok)
+		h.proxyWithToken(w, r, tok, predictedScope)
 		return
 	}
 
 	// Cache miss: probe upstream without auth.
-	probeResp, err := h.roundTrip(r, bodyBytes, "")
+	probeResp, err := h.roundTrip(r, "")
 	if err != nil {
 		slog.Error("upstream probe error", "path", r.URL.Path, "err", err)
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
@@ -164,9 +155,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resolvedScope = predictedScope
 	}
 
+	// Only ever ask for read access. A challenge for push/delete (or anything unrecognised) is
+	// answered 403 without calling the token service: the browser identity is read-only anyway,
+	// and this keeps the proxy from being the thing that requests broader tokens.
+	if !readOnlyScope(resolvedScope) {
+		slog.Warn("challenge scope refused", "scope", resolvedScope, "path", r.URL.Path)
+		http.Error(w, "scope not permitted", http.StatusForbidden)
+		return
+	}
+
 	slog.Debug("401 intercepted, fetching token", "scope", resolvedScope)
 
-	tok, expiry, err := h.fetcher.Fetch(r.Context(), service, resolvedScope)
+	tok, err := h.token(r.Context(), service, resolvedScope)
 	if err != nil {
 		// Fail closed: never surface a naked 401 to joxit, which would trigger
 		// its login dialog. 502 signals an internal auth failure instead.
@@ -175,23 +175,35 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store under both the predicted and resolved scope keys so future
-	// predictions hit the cache regardless of minor scope string differences.
-	h.cache.Set(resolvedScope, tok, expiry)
-	if predictedScope != "" && predictedScope != resolvedScope {
-		h.cache.Set(predictedScope, tok, expiry)
-	}
-
 	// Retry the original request with the Bearer token.
-	h.proxyWithToken(w, r, bodyBytes, tok)
+	h.proxyWithToken(w, r, tok, resolvedScope)
+}
+
+// token returns a token for scope, from the cache or from the token service. Concurrent misses for
+// the same service and scope share one request. The token is cached under the scope it was issued
+// for and no other: a token for one scope must never be served for a path predicted to need another.
+// The shared fetch runs detached from any one caller's context (the fetcher has its own timeout).
+func (h *Handler) token(ctx context.Context, service, scope string) (string, error) {
+	tok, _, err := h.flight.Do(service+"\x00"+scope, func() (string, time.Time, error) {
+		if cached, ok := h.cache.Get(scope); ok {
+			return cached, time.Time{}, nil
+		}
+		tok, expiry, err := h.fetcher.Fetch(context.WithoutCancel(ctx), service, scope)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		h.cache.Set(scope, tok, expiry)
+		return tok, expiry, nil
+	})
+	return tok, err
 }
 
 // proxyWithToken forwards the request with a Bearer token and streams the
 // response. Because a token was attached, a lingering 401 means the identity is
 // authenticated but not authorized; it is remapped to 403 so joxit does not
 // prompt for login (see the package comment).
-func (h *Handler) proxyWithToken(w http.ResponseWriter, r *http.Request, body []byte, tok string) {
-	resp, err := h.roundTrip(r, body, tok)
+func (h *Handler) proxyWithToken(w http.ResponseWriter, r *http.Request, tok, scope string) {
+	resp, err := h.roundTrip(r, tok)
 	if err != nil {
 		slog.Error("upstream error", "path", r.URL.Path, "err", err)
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
@@ -205,6 +217,9 @@ func (h *Handler) proxyWithToken(w http.ResponseWriter, r *http.Request, body []
 		// UI reports "forbidden" rather than popping a credentials dialog.
 		slog.Info("upstream 401 with token attached; remapping to 403",
 			"method", r.Method, "path", r.URL.Path)
+		// The registry no longer accepts this token (revoked, or issued for a different resource
+		// than its challenge names): drop it so the next request fetches a fresh one.
+		h.cache.Delete(scope)
 		resp.StatusCode = http.StatusForbidden
 	}
 
@@ -214,19 +229,14 @@ func (h *Handler) proxyWithToken(w http.ResponseWriter, r *http.Request, body []
 // roundTrip builds and executes one upstream HTTP request against the configured
 // upstream. It forwards the inbound headers verbatim except that it strips any
 // client-supplied Authorization header (the proxy owns that) and all hop-by-hop
-// headers, then optionally injects a Bearer token. The request body, if any, is
-// replayed from body so the same call works for both the probe and the retry.
-func (h *Handler) roundTrip(r *http.Request, body []byte, bearerToken string) (*http.Response, error) {
+// headers, then optionally injects a Bearer token. No request body is forwarded: only GET and HEAD
+// reach this point.
+func (h *Handler) roundTrip(r *http.Request, bearerToken string) (*http.Response, error) {
 	target := *h.upstream
 	target.Path = r.URL.Path
 	target.RawQuery = r.URL.RawQuery
 
-	var bodyReader io.Reader
-	if len(body) > 0 {
-		bodyReader = bytes.NewReader(body)
-	}
-
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), bodyReader)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -276,31 +286,4 @@ func isHopByHop(name string) bool {
 		}
 	}
 	return false
-}
-
-// parseBearerChallenge extracts the service and scope directives from a
-// WWW-Authenticate response header value. It returns empty strings for a
-// non-Bearer challenge or for directives that are absent. Example input:
-//
-//	Bearer realm="https://token.example.com/token",service="reg.example.com",scope="repository:foo:pull"
-func parseBearerChallenge(header string) (service, scope string) {
-	if !strings.HasPrefix(header, "Bearer ") {
-		return "", ""
-	}
-	for _, part := range strings.Split(strings.TrimPrefix(header, "Bearer "), ",") {
-		part = strings.TrimSpace(part)
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		k := strings.TrimSpace(kv[0])
-		v := strings.Trim(strings.TrimSpace(kv[1]), `"`)
-		switch k {
-		case "service":
-			service = v
-		case "scope":
-			scope = v
-		}
-	}
-	return service, scope
 }

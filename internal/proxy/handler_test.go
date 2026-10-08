@@ -2,9 +2,12 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +38,30 @@ func TestParseBearerChallenge(t *testing.T) {
 			header:      `Bearer service=reg.example.com,scope=registry:catalog:*`,
 			wantService: "reg.example.com",
 			wantScope:   "registry:catalog:*",
+		},
+		{
+			name:        "comma inside a quoted scope",
+			header:      `Bearer realm="https://t/token",service="reg",scope="repository:foo:pull,push"`,
+			wantService: "reg",
+			wantScope:   "repository:foo:pull,push",
+		},
+		{
+			name:        "space-separated scope list",
+			header:      `Bearer service="reg",scope="repository:a:pull repository:b:pull"`,
+			wantService: "reg",
+			wantScope:   "repository:a:pull repository:b:pull",
+		},
+		{
+			name:        "escaped quote and lowercase scheme",
+			header:      `bearer service="re\"g",scope="registry:catalog:*"`,
+			wantService: `re"g`,
+			wantScope:   "registry:catalog:*",
+		},
+		{
+			name:        "service text inside another parameter is not a directive",
+			header:      `Bearer realm="https://t/token?service=evil,scope=repository:x:push",service="reg"`,
+			wantService: "reg",
+			wantScope:   "",
 		},
 		{
 			name:        "non-bearer challenge",
@@ -139,14 +166,14 @@ func TestServeHTTP_RemapUnauthorized(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Always refuse, even with a token — simulates a lacking permission.
 		w.Header().Set("WWW-Authenticate",
-			`Bearer realm="https://token.example.com/token",service="reg",scope="repository:foo:delete"`)
+			`Bearer realm="https://token.example.com/token",service="reg",scope="repository:foo:pull"`)
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer upstream.Close()
 
 	h := newTestHandler(t, upstream.URL, "any-token")
 
-	req := httptest.NewRequest(http.MethodDelete, "/v2/foo/manifests/sha256:abc", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v2/foo/manifests/sha256:abc", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -247,19 +274,233 @@ func TestServeHTTP_TokenFailureIsBadGateway(t *testing.T) {
 	}
 }
 
-// TestServeHTTP_BodyCap verifies a request body over 32 MiB is refused with 413 before
-// anything is sent upstream.
-func TestServeHTTP_BodyCap(t *testing.T) {
-	called := false
-	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+// TestServeHTTP_OnlyGetAndHead verifies every other method is refused with 405 before the
+// upstream or the token service is contacted.
+func TestServeHTTP_OnlyGetAndHead(t *testing.T) {
+	var upstreamHits, tokenHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { upstreamHits.Add(1) }))
+	defer upstream.Close()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { tokenHits.Add(1) }))
+	defer tokenSrv.Close()
+	h := NewHandler(upstream.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "registry-browser", "secret"))
+
+	for _, m := range []string{http.MethodPut, http.MethodPost, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(m, "/v2/foo/blobs/uploads/x", strings.NewReader("data")))
+		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "GET, HEAD" {
+			t.Errorf("%s: status = %d, Allow = %q; want 405 with Allow: GET, HEAD", m, rec.Code, rec.Header().Get("Allow"))
+		}
+	}
+	if upstreamHits.Load() != 0 || tokenHits.Load() != 0 {
+		t.Errorf("upstream hit %d times, token service %d times; want neither", upstreamHits.Load(), tokenHits.Load())
+	}
+}
+
+// TestServeHTTP_HeadIsForwarded verifies HEAD (used for manifest and blob existence checks) works.
+func TestServeHTTP_HeadIsForwarded(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead || r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer service="reg",scope="repository:foo:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", "sha256:abc")
+	}))
+	defer upstream.Close()
+	h := newTestHandler(t, upstream.URL, "tok")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/v2/foo/manifests/latest", nil))
+	if rec.Code != http.StatusOK || rec.Header().Get("Docker-Content-Digest") != "sha256:abc" {
+		t.Errorf("status = %d, digest = %q", rec.Code, rec.Header().Get("Docker-Content-Digest"))
+	}
+}
+
+// TestServeHTTP_RefusesNonReadChallenge verifies a challenge for push, delete, a wildcard or a
+// malformed scope is answered 403 and never reaches the token service.
+func TestServeHTTP_RefusesNonReadChallenge(t *testing.T) {
+	for _, scope := range []string{
+		"repository:foo:push",
+		"repository:foo:pull,push",
+		"repository:foo:delete",
+		"repository:foo:*",
+		"repository:foo:pull repository:bar:push",
+		"registry:admin:*",
+		"repository:foo",
+	} {
+		t.Run(scope, func(t *testing.T) {
+			var tokenHits atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("WWW-Authenticate", `Bearer service="reg",scope="`+scope+`"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			}))
+			defer upstream.Close()
+			tokenSrv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { tokenHits.Add(1) }))
+			defer tokenSrv.Close()
+			h := NewHandler(upstream.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "registry-browser", "secret"))
+
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/foo/tags/list", nil))
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want 403", rec.Code)
+			}
+			if tokenHits.Load() != 0 {
+				t.Error("the token service was asked for a non-read scope")
+			}
+		})
+	}
+}
+
+// TestServeHTTP_TokenCachedOnlyUnderIssuedScope is the poisoning regression: the registry challenges
+// a request for scope A, the token issued is for A, and a later request that PREDICTS scope B (a
+// different resource) must not be served A's token.
+func TestServeHTTP_TokenCachedOnlyUnderIssuedScope(t *testing.T) {
+	var issued []string
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scope := r.URL.Query().Get("scope")
+		issued = append(issued, scope)
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "token-for:" + scope, "expires_in": 300})
+	}))
+	defer tokenSrv.Close()
+
+	var seen []string
+	var probes int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			probes++
+			// Whatever is asked for, the registry challenges for repository:a — a challenge
+			// scope that differs from the one predicted from the path.
+			w.Header().Set("WWW-Authenticate", `Bearer service="reg",scope="repository:a:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		seen = append(seen, r.URL.Path+" "+auth)
+	}))
 	defer upstream.Close()
 
-	h := newTestHandler(t, upstream.URL, "tok")
-	body := strings.NewReader(strings.Repeat("x", maxBodyBytes+1))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v2/foo/blobs/uploads/x", body))
+	h := NewHandler(upstream.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "registry-browser", "secret"))
+	get := func(path string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d", path, rec.Code)
+		}
+	}
+	get("/v2/b/tags/list") // predicted scope repository:b:pull, challenged (and issued) repository:a:pull
+	get("/v2/b/tags/list") // must NOT hit the cache under the predicted key repository:b:pull
+	get("/v2/a/tags/list") // predicted repository:a:pull — the scope actually issued — may reuse the token
 
-	if rec.Code != http.StatusRequestEntityTooLarge || called {
-		t.Errorf("status = %d, upstream called = %v; want 413 and no upstream call", rec.Code, called)
+	if len(issued) != 1 || issued[0] != "repository:a:pull" {
+		t.Errorf("token requests = %v; want exactly one, for repository:a:pull", issued)
+	}
+	// Both /v2/b requests probed: the token was not cached under b's predicted key. The /v2/a request
+	// predicted the scope the token was issued for and reused it without a probe.
+	if probes != 2 {
+		t.Errorf("unauthenticated probes = %d, want 2", probes)
+	}
+	for _, s := range seen {
+		if strings.HasPrefix(s, "/v2/b/") && !strings.HasSuffix(s, "token-for:repository:a:pull") {
+			t.Errorf("unexpected token on %q", s)
+		}
+	}
+}
+
+// TestServeHTTP_ConcurrentMissesShareOneTokenRequest verifies a burst of cold-cache requests for one
+// scope costs one token request.
+func TestServeHTTP_ConcurrentMissesShareOneTokenRequest(t *testing.T) {
+	var tokenHits atomic.Int32
+	release := make(chan struct{})
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		tokenHits.Add(1)
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "tok", "expires_in": 300})
+	}))
+	defer tokenSrv.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer service="reg",scope="registry:catalog:*"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer upstream.Close()
+	h := NewHandler(upstream.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "registry-browser", "secret"))
+
+	const n = 6
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil))
+			codes[i] = rec.Code
+		}()
+	}
+	time.Sleep(150 * time.Millisecond) // every request has probed and is waiting on the token
+	close(release)
+	wg.Wait()
+
+	if tokenHits.Load() != 1 {
+		t.Errorf("token service hit %d times, want 1", tokenHits.Load())
+	}
+	for i, c := range codes {
+		if c != http.StatusOK {
+			t.Errorf("request %d: status = %d", i, c)
+		}
+	}
+}
+
+// TestServeHTTP_RefusedTokenIsDropped verifies a cached token the registry rejects is evicted, so
+// the next request fetches a fresh one instead of failing until the old one expires.
+func TestServeHTTP_RefusedTokenIsDropped(t *testing.T) {
+	var issuedCount atomic.Int32
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := issuedCount.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": fmt.Sprintf("tok%d", n), "expires_in": 300})
+	}))
+	defer tokenSrv.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok2" {
+			w.Header().Set("WWW-Authenticate", `Bearer service="reg",scope="repository:foo:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer upstream.Close()
+	h := NewHandler(upstream.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "registry-browser", "secret"))
+
+	codes := make([]int, 0, 2)
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/foo/tags/list", nil))
+		codes = append(codes, rec.Code)
+	}
+	// First request: tok1 is rejected (403). The cache entry is dropped, so the second fetches tok2.
+	if codes[0] != http.StatusForbidden || codes[1] != http.StatusOK {
+		t.Errorf("statuses = %v, want [403 200]", codes)
+	}
+}
+
+func TestReadOnlyScope(t *testing.T) {
+	for scope, want := range map[string]bool{
+		"":                                    true,
+		"registry:catalog:*":                  true,
+		"repository:foo:pull":                 true,
+		"repository:team/app:pull":            true,
+		"repository:host:5000/app:pull":       true,
+		"repository:a:pull repository:b:pull": true,
+		"repository:foo:push":                 false,
+		"repository:foo:pull,push":            false,
+		"repository:foo:*":                    false,
+		"repository::pull":                    false,
+		"repository:foo":                      false,
+		"registry:catalog:pull":               false,
+		"registry:admin:*":                    false,
+		"repository:a:pull repository:b:push": false,
+		"something":                           false,
+	} {
+		if got := readOnlyScope(scope); got != want {
+			t.Errorf("readOnlyScope(%q) = %v, want %v", scope, got, want)
+		}
 	}
 }

@@ -17,13 +17,17 @@ Browser → joxit nginx → registry-auth-proxy → Distribution registry
                        registry token service
 
 Per request:
+  0. Method is not GET/HEAD → 405 (nothing else happens). No body is forwarded.
   1. Predict scope from URL path.
   2. Cache hit  → forward with cached Bearer token (no probe).
   3. Cache miss → probe upstream unauthenticated.
                     non-401 → stream back unchanged.
-                    401     → parse WWW-Authenticate challenge,
-                              GET token-service /token (Basic auth),
-                              cache token (expiry − refresh margin),
+                    401     → parse WWW-Authenticate challenge (quote-aware);
+                              scope not pull/catalog → 403, no token request;
+                              GET token-service /token (Basic auth, one request
+                              shared by concurrent misses),
+                              cache token under the ISSUED scope only
+                              (expiry − refresh margin; 512-entry bound),
                               retry with Bearer token.
   4. Still 401 after a token was attached → remap to 403 (no login dialog).
 ```
@@ -33,9 +37,11 @@ Per request:
 ```
 cmd/server/main.go            HTTP server, routing, graceful shutdown, -healthcheck
 internal/config/config.go     Env config; client secret loaded from CLIENT_SECRET_FILE
-internal/proxy/handler.go     Reverse proxy: probe/retry, hop-by-hop stripping, 401→403 remap
+internal/proxy/handler.go     Reverse proxy: method allowlist, probe/retry, hop-by-hop stripping, 401→403 remap
+internal/proxy/challenge.go   Quote-aware Bearer challenge parser; read-only scope filter
 internal/proxy/scope.go       Predict OCI scope string from request URL path
-internal/token/cache.go       Thread-safe per-scope token cache (margin-based expiry)
+internal/token/cache.go       Thread-safe, bounded per-scope token cache (margin-based expiry)
+internal/token/flight.go      Collapses concurrent token fetches for one scope into one request
 internal/token/fetcher.go     Fetch tokens from the internal token service (Basic auth)
 ```
 
@@ -93,14 +99,13 @@ curl -s http://localhost:8181/v2/<repo>/tags/list
 
 Prediction is a cache-key optimisation, not an authorisation decision. It maps read
 paths to a `pull`/`catalog` scope so a cache hit can skip the unauthenticated probe. A
-mispredict is always safe: the worst case is an unnecessary probe or a pull token
-attached to a write path, which the registry rejects and the handler remaps to 403. All
-predicted scopes are read-only; write/delete scopes are never predicted.
+mispredict is always safe: the worst case is an unnecessary probe. A token is cached only
+under the scope it was issued for, so a mispredicted key can never be served another
+scope's token. All predicted scopes are read-only, and the challenge scope is vetted the
+same way before any token is requested.
 
 ## Known limitations (intentional)
 
-- **No singleflight.** On a cold cache, concurrent requests for the same scope each fetch
-  their own token. Negligible for a single-user browser UI; not worth the complexity.
 - **No server read/write timeout.** Only `ReadHeaderTimeout` is set, so large blob
   downloads can stream without being cut off. The token fetcher has its own 10s timeout.
 
@@ -113,4 +118,5 @@ predicted scopes are read-only; write/delete scopes are never predicted.
 - Inbound `Authorization` headers are stripped; the proxy owns that header.
 - Hop-by-hop headers (RFC 7230 §6.1) are stripped in both directions.
 - Response bodies are **streamed**, never fully buffered (constant memory for blobs).
-- The proxy is read-only by identity; it never predicts or requests write/delete scopes.
+- The proxy is read-only by construction: GET/HEAD only, no request body, and it never
+  requests a write/delete scope (such a challenge is a 403).

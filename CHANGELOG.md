@@ -5,6 +5,31 @@ All notable changes to registry-auth-proxy are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-10-08
+
+### Security
+
+- Read-only by construction: only `GET` and `HEAD` are forwarded (other methods are `405` before
+  the upstream or the token service is contacted) and no request body is read or forwarded; the
+  32 MiB replay buffer is removed.
+- A token is requested only for `registry:catalog:*` or `repository:<name>:pull`. A challenge for
+  push, delete, `*` or a malformed scope is answered `403` without a token request. The challenge
+  parser is quote-aware (commas and escaped quotes inside values, case-insensitive scheme).
+- A token is cached only under the scope it was issued for; it was also stored under the scope
+  predicted from the path, so a challenge naming a different resource could poison that key.
+- The token cache is bounded (512 entries; expired entries swept, then the one closest to expiry
+  dropped) and no longer stores a token already inside the refresh margin.
+
+### Changed
+
+- Concurrent cache misses for one scope share a single token request.
+- A token the registry refuses (401 with the token attached) is evicted, so the next request
+  fetches a fresh one instead of failing until the old token expires.
+- Release gate: the tag workflow runs the same checks as CI (reusable workflow: lint, race tests,
+  govulncheck, Trivy filesystem scan), scans the published image before signing, and prints a
+  `cosign verify` command pinned to the workflow identity. `go.mod` names a `toolchain` and the
+  Dockerfile refuses a builder on another patch.
+
 ## [0.1.3] - 2026-10-03
 
 ### Fixed

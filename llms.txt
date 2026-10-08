@@ -32,7 +32,9 @@
 
 - Predict OCI scope from URL path (catalog / repository:*:pull).
 - Cache hit → forward with cached token. Miss → probe unauthenticated.
-- Non-401 → stream back. 401 → parse challenge, fetch token, cache, retry with Bearer.
+- Only GET/HEAD are forwarded (else 405); no request body is forwarded.
+- Non-401 → stream back. 401 → parse challenge (quote-aware); a non pull/catalog scope → 403;
+  else fetch token (one request per scope for concurrent misses), cache it under the issued scope, retry with Bearer.
 - Still 401 with a token attached → remap to 403 (no login dialog).
 
 ## Security invariants
@@ -40,7 +42,7 @@
 - Client secret file-only, never logged; Bearer tokens never logged.
 - Fail closed: token-fetch error → 502, never a naked 401.
 - Inbound Authorization headers stripped; hop-by-hop headers stripped both directions.
-- Read-only identity: only pull/catalog scopes predicted or requested.
+- Read-only: GET/HEAD only; only pull/catalog scopes predicted or requested; token cache bounded (512) and keyed by issued scope.
 - Response bodies streamed, never fully buffered.
 
 ## Supply chain

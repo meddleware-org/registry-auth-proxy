@@ -14,6 +14,10 @@ WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 
+# The binary is built with the toolchain go.mod names, which is the one CI's govulncheck checks: a builder
+# image left on another patch fails here instead of shipping an unchecked stdlib.
+RUN grep -q "^toolchain $(go env GOVERSION)$" go.mod || { echo "builder $(go env GOVERSION) != go.mod toolchain"; exit 1; }
+
 COPY . .
 
 # Fully static binary: no libc, no CGO — runs in scratch.

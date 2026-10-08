@@ -43,18 +43,24 @@ For each request the proxy:
    streamed straight back.
 3. On **401**, parses the `WWW-Authenticate: Bearer …` challenge, fetches a token from
    the internal token service (HTTP Basic auth with the `registry-browser` credentials),
-   caches it (minus a refresh margin), and **retries** with the Bearer token attached.
+   caches it (minus a refresh margin) under the scope it was issued for, and **retries**
+   with the Bearer token attached. Only read scopes are ever requested (`pull` on a
+   repository, or the catalog); a challenge for any other scope is answered `403`
+   without calling the token service, and concurrent misses share one token request.
+
+Only `GET` and `HEAD` are forwarded; other methods get `405`, and no request body is
+forwarded.
 
 Two properties guarantee joxit never sees a 401:
 
 - Any inbound `Authorization` header is **stripped** before the request is forwarded, so
   stale credentials in the UI's `localStorage` are never used.
-- If a request is **still 401 after a valid token was attached** (e.g. a delete attempt
-  the read-only identity is not granted), the proxy **remaps the status to 403**. joxit
+- If a request is **still 401 after a valid token was attached** (the registry
+  refused the read-only identity), the proxy **remaps the status to 403**. joxit
   treats 403 as "not allowed" and does not prompt; a raw 401 would trigger the dialog.
 
-The proxy is **stateless** apart from an in-memory per-scope token cache; restarting it
-simply re-warms the cache on demand.
+The proxy is **stateless** apart from an in-memory per-scope token cache (bounded to 512
+entries); restarting it simply re-warms the cache on demand.
 
 ## Quick start
 

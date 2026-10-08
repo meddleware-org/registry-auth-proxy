@@ -29,9 +29,17 @@ security-critical in the same way as the token service — it only ever holds th
    authorized — remap it to 403. Only the unauthenticated probe path may branch on 401
    (to trigger a token fetch); a token-bearing 401 is always remapped.
 
-4. **Body buffer limit is 32 MiB.** This exists to replay bodies on retry. It must not
-   be raised without operator review — joxit is read-only and should never send a body
-   larger than a few kilobytes.
+4. **Read-only, no request bodies.** Only `GET` and `HEAD` are forwarded; every other
+   method is `405` before the upstream or the token service is contacted. No request body
+   is read or forwarded (the old 32 MiB replay buffer is gone). A token is requested only
+   for `registry:catalog:*` or `repository:<name>:pull`; a challenge for anything else
+   (push, delete, `*`, a malformed scope) is answered `403` without a token request.
+   Challenge parsing is quote-aware (`challenge.go`).
+
+   **A token is cached only under the scope it was issued for** — never under the scope
+   predicted from the path — and the cache is bounded (512 entries; expired entries are
+   swept, then the one closest to expiry is dropped). Concurrent misses for one scope
+   share a single token request (`token.Flight`). A token the registry refuses is evicted.
 
 5. **Do not buffer response bodies.** Responses (especially blob downloads) are streamed
    directly from upstream to joxit. Buffering would break large responses and
@@ -52,5 +60,7 @@ security-critical in the same way as the token service — it only ever holds th
   in the same namespace; network policy prevents external access.
 - Do not upgrade CLIENT_SECRET to an env var for "convenience". Kubernetes Secrets
   mounted as files are the correct pattern for credentials.
+- Do not cache a token under any key but the scope it was issued for, and do not forward a
+  request body or a method other than GET/HEAD.
 - Do not implement token refresh via background goroutine. The lazy cache-miss approach
   is simpler and correct — the extra latency on cache miss is negligible.
