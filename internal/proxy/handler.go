@@ -35,8 +35,10 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -60,6 +62,29 @@ var hopByHopHeaders = []string{
 	"Upgrade",
 }
 
+// viaToken marks requests that passed through this proxy. A request that already carries it has looped
+// back (the upstream resolves to this hop, or another hop forwards here): it is refused rather than
+// forwarded again, so a misconfiguration cannot turn into an infinite request loop.
+const viaToken = "1.1 registry-auth-proxy"
+
+// Upstream deadlines. Blob downloads stream for as long as the client keeps reading, so there is no
+// total deadline; what must never hang is connecting and waiting for the response headers.
+const (
+	upstreamDialTimeout           = 5 * time.Second
+	upstreamResponseHeaderTimeout = 30 * time.Second
+	// DefaultMaxInFlight bounds concurrent forwards; beyond it the proxy answers 503 at once.
+	DefaultMaxInFlight = 64
+)
+
+// responseDropped lists upstream response fields never passed to the UI: the UI is same-origin behind
+// nginx, so an upstream CORS grant would only widen who may read the response, and the registry sets no
+// cookies the UI could use.
+var responseDropped = []string{"Set-Cookie", "Set-Cookie2"}
+
+// requestDropped lists inbound request fields never passed upstream besides Authorization and the
+// hop-by-hop set: the registry authenticates with the Bearer token only.
+var requestDropped = []string{"Cookie", "Cookie2"}
+
 // Handler is a pre-authenticating reverse proxy. It sits between joxit's nginx
 // and the Distribution registry, transparently handling Bearer token auth so
 // joxit never sees a 401 and never needs its own credentials dialog. A Handler
@@ -71,6 +96,8 @@ type Handler struct {
 	fetcher  *token.Fetcher
 	flight   token.Flight
 	client   *http.Client
+	// inflight is a counting semaphore bounding concurrent forwards.
+	inflight chan struct{}
 }
 
 // NewHandler builds a Handler that proxies to upstreamURL, caching and fetching
@@ -86,7 +113,15 @@ func NewHandler(upstreamURL string, cache *token.Cache, fetcher *token.Fetcher) 
 		upstream: u,
 		cache:    cache,
 		fetcher:  fetcher,
+		inflight: make(chan struct{}, DefaultMaxInFlight),
 		client: &http.Client{
+			Transport: &http.Transport{
+				Proxy:                 nil, // the upstream is in-cluster: never through an environment proxy
+				DialContext:           (&net.Dialer{Timeout: upstreamDialTimeout}).DialContext,
+				ResponseHeaderTimeout: upstreamResponseHeaderTimeout,
+				MaxIdleConnsPerHost:   16,
+				IdleConnTimeout:       90 * time.Second,
+			},
 			// no global timeout; per-request context controls deadline
 			// Do not follow upstream redirects: the registry is trusted and does not 3xx on the
 			// proxied paths, so an unexpected redirect is returned verbatim (and remapped like any
@@ -110,6 +145,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A request that already passed through this proxy has looped: refuse it.
+	for _, via := range r.Header.Values("Via") {
+		if strings.Contains(via, "registry-auth-proxy") {
+			http.Error(w, "loop detected", http.StatusLoopDetected)
+			return
+		}
+	}
+
+	// Bound the work in flight: a burst past the bound is answered at once instead of queueing sockets.
+	select {
+	case h.inflight <- struct{}{}:
+		defer func() { <-h.inflight }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+		return
+	}
+
 	// Reject parent-directory traversal / out-of-bounds paths outright (defence-in-depth, F2).
 	// joxit is read-only and only ever requests canonical /v2 paths, so a ".." segment is always
 	// malformed; rejecting here keeps the predicted scope (and its cache key) honest.
@@ -130,7 +183,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Cache miss: probe upstream without auth.
 	probeResp, err := h.roundTrip(r, "")
 	if err != nil {
-		slog.Error("upstream probe error", "path", r.URL.Path, "err", err)
+		slog.Error("upstream probe error", "path", r.URL.Path, "cause", errorKind(err))
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -205,7 +258,7 @@ func (h *Handler) token(ctx context.Context, service, scope string) (string, err
 func (h *Handler) proxyWithToken(w http.ResponseWriter, r *http.Request, tok, scope string) {
 	resp, err := h.roundTrip(r, tok)
 	if err != nil {
-		slog.Error("upstream error", "path", r.URL.Path, "err", err)
+		slog.Error("upstream error", "path", r.URL.Path, "cause", errorKind(err))
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -241,16 +294,18 @@ func (h *Handler) roundTrip(r *http.Request, bearerToken string) (*http.Response
 		return nil, err
 	}
 
-	// Forward headers verbatim except Authorization (we own it) and hop-by-hop
-	// headers (must not cross an intermediary).
+	// Forward headers except Authorization (we own it), cookies, and hop-by-hop fields: the fixed
+	// RFC 9110 set and every field the client named in Connection (RFC 9110 §7.6.1).
+	named := connectionNamed(r.Header)
 	for k, vv := range r.Header {
-		if strings.EqualFold(k, "authorization") || isHopByHop(k) {
+		if strings.EqualFold(k, "authorization") || isHopByHop(k) || isDropped(k, requestDropped) || named[strings.ToLower(k)] {
 			continue
 		}
 		for _, v := range vv {
 			req.Header.Add(k, v)
 		}
 	}
+	req.Header.Add("Via", viaToken)
 	if bearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+bearerToken)
 	}
@@ -264,8 +319,9 @@ func (h *Handler) roundTrip(r *http.Request, bearerToken string) (*http.Response
 // dropping hop-by-hop headers. The body is streamed (never fully buffered) so
 // large blob downloads pass through with constant memory.
 func copyResponse(w http.ResponseWriter, resp *http.Response) {
+	named := connectionNamed(resp.Header)
 	for k, vv := range resp.Header {
-		if isHopByHop(k) {
+		if isHopByHop(k) || named[strings.ToLower(k)] || isDropped(k, responseDropped) || isCORS(k) {
 			continue
 		}
 		for _, v := range vv {
@@ -274,6 +330,50 @@ func copyResponse(w http.ResponseWriter, resp *http.Response) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// connectionNamed returns the lower-cased field names listed in the Connection header(s): they are
+// scoped to the connection they arrived on and must not be forwarded either.
+func connectionNamed(h http.Header) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range h.Values("Connection") {
+		for _, name := range strings.Split(v, ",") {
+			if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out
+}
+
+func isDropped(name string, list []string) bool {
+	for _, d := range list {
+		if strings.EqualFold(name, d) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCORS reports whether name is an Access-Control-* field.
+func isCORS(name string) bool {
+	return len(name) >= 15 && strings.EqualFold(name[:15], "access-control-")
+}
+
+// errorKind classifies an upstream failure for the log without the error text, which carries the
+// upstream URL and so an internal hostname.
+func errorKind(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	default:
+		return "unreachable"
+	}
 }
 
 // isHopByHop reports whether header name is a connection-scoped hop-by-hop

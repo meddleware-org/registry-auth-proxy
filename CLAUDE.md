@@ -20,8 +20,11 @@ security-critical in the same way as the token service — it only ever holds th
 3. **Strip inbound Authorization headers.** joxit may send stale credentials from its
    localStorage. Always replace the Authorization header with our own Bearer token;
    never forward a client-supplied Authorization header to the upstream registry. Also
-   strip hop-by-hop headers (RFC 7230 §6.1) in both directions — copying upstream
-   `Connection`/`Transfer-Encoding` to the client produces malformed responses.
+   strip hop-by-hop headers (RFC 7230 §6.1) in both directions, **and every field named in
+   `Connection`** — copying upstream `Connection`/`Transfer-Encoding` to the client produces
+   malformed responses. Cookies are not forwarded upstream; `Set-Cookie` and `Access-Control-*` are
+   not passed to the UI (it is same-origin behind nginx). The proxy adds `Via: 1.1 registry-auth-proxy`
+   and refuses (508) a request that already carries it, so a misrouted upstream cannot loop.
 
    **Remap 401→403 after a token is attached.** The whole point of the proxy is that
    joxit never sees a 401 (a 401 triggers its login dialog). If a request is still 401
@@ -40,6 +43,12 @@ security-critical in the same way as the token service — it only ever holds th
    predicted from the path — and the cache is bounded (512 entries; expired entries are
    swept, then the one closest to expiry is dropped). Concurrent misses for one scope
    share a single token request (`token.Flight`). A token the registry refuses is evicted.
+
+   **Limits.** At most 64 forwards are in flight (`DefaultMaxInFlight`; beyond that, 503 with
+   `Retry-After`); the upstream connection has a 5 s dial and a 30 s response-header deadline (no total
+   deadline, so blob downloads stream); request headers are capped at 32 KiB. A failed upstream is logged
+   by class (`timeout` / `canceled` / `unreachable`), never with the error text, which carries the
+   upstream address.
 
 5. **Do not buffer response bodies.** Responses (especially blob downloads) are streamed
    directly from upstream to joxit. Buffering would break large responses and

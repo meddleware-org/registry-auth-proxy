@@ -5,6 +5,12 @@ All notable changes to registry-auth-proxy are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-10-09
+
+### Security
+
+- Forwarding follows the PROXY lens: every field named in `Connection` is stripped in both directions, cookies are not sent upstream, `Set-Cookie` and `Access-Control-*` are not passed to the UI, the proxy marks its hop with `Via` and refuses (508) a looped request, at most 64 forwards are in flight (503 + Retry-After beyond that), the upstream has dial and response-header deadlines, request headers are capped at 32 KiB, and an upstream failure is logged by class without the upstream address
+
 ## [0.1.5] - 2026-10-09
 
 ### Security

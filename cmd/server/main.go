@@ -78,6 +78,9 @@ func main() {
 		Handler:           logRequest(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		// The UI sends short GETs: a 32 KiB header cap is ample (the default is 1 MiB), and there is no
+		// request body to read. No WriteTimeout: blob downloads stream for as long as the client reads.
+		MaxHeaderBytes: 32 << 10,
 	}
 
 	go func() {
