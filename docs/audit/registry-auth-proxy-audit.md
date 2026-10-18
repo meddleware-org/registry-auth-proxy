@@ -498,7 +498,7 @@ This is the same pattern as static-server F2.
 ### F10 — Client-secret rotation is undocumented, and the secret is read only at startup
 
 **Severity:** Info (AUTH B.AUTH-1: "a credential without a rotation plan is a finding")
-**Disposition:** MITIGATED (0.1.7, commit pending: the procedure and the compromise steps are documented
+**Disposition:** MITIGATED (0.1.7, commit `de46a96`: the procedure and the compromise steps are documented
 and the proxy re-reads the secret file after a refusal, so a rotation needs no restart; the rotation
 rehearsal, a cadence and a last-rotation record are maintainer tasks, Section D)
 **Where (0.1.6):** `internal/config/config.go` (read once); README, SECURITY.md and CLAUDE.md (no
@@ -581,7 +581,7 @@ deadline.
 - **Multiple scopes — unchanged by design.** `readOnlyScope` now vets every entry, but the list still
   goes to the token service as one `scope` value (`fetcher.go:368-372`); how it is read is the token
   service's (registry-token-service F16). The registry's challenges for the UI's requests name one scope each, so this is dormant.
-- **Endpoint query string — RESOLVED (0.1.7, commit pending).** The fetch URL is now built with
+- **Endpoint query string — RESOLVED (0.1.7, commit `de46a96`).** The fetch URL is now built with
   `url.Parse` and `Query().Set`, so an endpoint that already carries a query stays well-formed (its
   parameters are kept, a stray `scope` does not survive an empty scope). Test:
   `TestFetchKeepsEndpointQuery`. The deployed `TOKEN_ENDPOINT` has no query; this removes the footgun.
@@ -592,7 +592,7 @@ deadline.
 
 ### F12 — Documentation drift
 
-**Severity:** Info   **Disposition:** MITIGATED (0.1.7, commit pending: every item that lives in this
+**Severity:** Info   **Disposition:** MITIGATED (0.1.7, commit `de46a96`: every item that lives in this
 repository is fixed; the base Deployment manifest tag is in `k8s/`, outside it)
 
 - SECURITY.md invariant 4 ("predicts and requests only `pull` and `catalog`") was false for requests
@@ -714,7 +714,7 @@ upstream, then asserts the host and port appear in neither the log nor the respo
 
 ### F17 — A token-service failure still logs the token endpoint URL
 
-**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit pending)
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit `de46a96`)
 **Where (0.1.6):** the handler logged `slog.Error("token fetch error", …, "err", err)`, and the error
 (`fmt.Errorf("token endpoint: %w", err)`) wrapped the `*url.Error` carrying the full request URL.
 **Where (0.1.7):** `internal/token/fetcher.go` (`FetchError`, `FailureClass`, `FailureStatus`,
@@ -734,7 +734,7 @@ host, the path, `service=`, the secret nor `Basic ` in the log or the body), `Te
 
 ### F18 — Forwarding policy is a denylist: any path is forwarded, and some client fields pass through
 
-**Severity:** Low   **Disposition:** RESOLVED (0.1.7, commit pending)
+**Severity:** Low   **Disposition:** RESOLVED (0.1.7, commit `de46a96`)
 **Where (0.1.6):** `internal/proxy/handler.go` (`roundTrip`), `internal/proxy/scope.go`
 (`NormalizePath`).
 **Where (0.1.7):** `Route` and `routeRules` in `internal/proxy/scope.go`; the route check at the top of
@@ -823,7 +823,7 @@ probe.
 
 ### F20 — The new deadlines and header cap are configured but not exercised by tests
 
-**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit pending; sizing and measuring the limits for
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit `de46a96`; sizing and measuring the limits for
 the plan tier stays a pre-mainnet measurement, Section D)
 **Where (0.1.6):** the values were constants in `NewHandler` and `main`; `cmd/server` had 0% coverage.
 **Where (0.1.7):** `limits`/`defaultLimits`/`newHandler` in `internal/proxy/handler.go` (the constants
@@ -876,7 +876,7 @@ alone no longer widens the browser.
 
 ### F22 — No licence or notice text for the compiled-in stdlib and the CA bundle ships in the image
 
-**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit pending; the same finding as
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit `de46a96`; the same finding as
 registry-token-service F18, fixed the same way)
 **Where (0.1.6):** `Dockerfile` (`scratch` plus `/auth-proxy` and `/etc/ssl/certs/ca-certificates.crt`).
 **Where (0.1.7):** `Dockerfile` (notices stage and `COPY`), `scripts/third-party-licenses.sh`,
@@ -1123,11 +1123,11 @@ cosign-verified on 2026-10-09.
 - [x] SBOM, signing and provenance in place
 - [x] SIGTERM drains in-flight requests; health endpoint reveals nothing (`main.go:78-87`, `/healthz`)
 - [x] release build flags stated (`-trimpath`, `CGO_ENABLED=0`, version injection); image per the IMG lens
-- [x] F5's platform transport cited in SECURITY.md; rotation procedure documented (F5, F10, F12) — `SECURITY.md` "Transport to the token service and the registry" (decision D18) and "Client-secret rotation and compromise", 0.1.7, commit pending; the rotation rehearsal is the maintainer line below
-- [x] README `cosign verify` pinned to the publish workflow; licence notices shipped in the image; `docs/` committed (F12, F22) — README regexp pinned to `docker-publish.yml@refs/tags/v*`; notices in `/usr/share/doc/registry-auth-proxy/` with the `image` CI job (`scripts/check-image-notices.sh`, `image notices OK` under rootless podman); `docs/` committed with the 0.1.7 commit (commit pending)
+- [x] F5's platform transport cited in SECURITY.md; rotation procedure documented (F5, F10, F12) — `SECURITY.md` "Transport to the token service and the registry" (decision D18) and "Client-secret rotation and compromise", 0.1.7, commit `de46a96`; the rotation rehearsal is the maintainer line below
+- [x] README `cosign verify` pinned to the publish workflow; licence notices shipped in the image; `docs/` committed (F12, F22) — README regexp pinned to `docker-publish.yml@refs/tags/v*`; notices in `/usr/share/doc/registry-auth-proxy/` with the `image` CI job (`scripts/check-image-notices.sh`, `image notices OK` under rootless podman); `docs/` committed with the 0.1.7 commit (commit `de46a96`)
 - [ ] key rotation with overlap rehearsed; compromise procedure documented for the `registry-browser` secret (F10) — the compromise procedure is documented (`SECURITY.md`, 0.1.7) and rotation is restart-free (`TestSecretRotationWithoutRestart`); the rehearsal against the live cluster, a cadence and a last-rotation record are maintainer tasks
 - [ ] the negative origin check runs on a schedule (F19) — platform, maintainer
-- [x] deadline and header-cap tests (F20) — `limits_test.go`, `dial_linux_test.go`, `cmd/server/main_test.go`; 0.1.7, commit pending
+- [x] deadline and header-cap tests (F20) — `limits_test.go`, `dial_linux_test.go`, `cmd/server/main_test.go`; 0.1.7, commit `de46a96`
 - [ ] limits sized for the plan tier and measured under load (F20 remainder) — maintainer
 - [ ] registry credential inventory (scope, holder, rotation date) — maintainer, `OPERATOR_TASKS.md` "Image registry credentials", deferred to launch
 - [ ] external review of the forwarding path — awaiting external review
@@ -1362,7 +1362,7 @@ verify` pinned to the workflow, F12).
     `Cf-Access-Jwt-Assertion` header on the proxy hop (F18) were not observed.
   - Registry credential inventory: a maintainer item (`OPERATOR_TASKS.md` "Image registry credentials"),
     deferred to launch.
-- 2026-10-18 — fix wave, 0.1.7 (local commit, release pending; commit pending). Toolchain
+- 2026-10-18 — fix wave, 0.1.7 (local commit, release pending; commit `de46a96`). Toolchain
   `GOTOOLCHAIN=go1.26.9`.
   - **Resolved:** F17 (token-fetch failures logged by class and status, `token.FetchError`), F18 (route
     allowlist with the registry's grammars, canonical never-rewritten paths, `X-Forwarded-*`/`Forwarded`/
