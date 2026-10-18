@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -349,5 +350,43 @@ func TestForward_TokenFailureLogsClassWithoutEndpoint(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestForward_NoCredentialReachesAForeignRedirectTarget: when the registry answers the credentialed request
+// with a redirect, the redirect is returned to the caller and never followed, so the Bearer token cannot be
+// sent to the Location's host (audit F4, the credentialed leg).
+func TestForward_NoCredentialReachesAForeignRedirectTarget(t *testing.T) {
+	var foreignHits atomic.Int32
+	var foreignAuth atomic.Value
+	foreign := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		foreignHits.Add(1)
+		foreignAuth.Store(r.Header.Get("Authorization"))
+	}))
+	defer foreign.Close()
+
+	var credentialed atomic.Int32
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="https://t/token",service="reg",scope="registry:catalog:*"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		credentialed.Add(1)
+		http.Redirect(w, r, foreign.URL+"/steal", http.StatusFound)
+	}))
+	defer registry.Close()
+
+	h := newTestHandler(t, registry.URL, "secret-bearer")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil))
+	if credentialed.Load() != 1 {
+		t.Fatalf("the credentialed leg was not exercised (%d requests)", credentialed.Load())
+	}
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), foreign.URL) {
+		t.Errorf("status %d location %q; the redirect must be returned unchanged", rec.Code, rec.Header().Get("Location"))
+	}
+	if foreignHits.Load() != 0 {
+		t.Errorf("the redirect target received %d requests (Authorization %q)", foreignHits.Load(), foreignAuth.Load())
 	}
 }

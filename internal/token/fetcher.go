@@ -158,13 +158,22 @@ func (f *Fetcher) Fetch(ctx context.Context, service, scope string) (tok string,
 }
 
 func (f *Fetcher) attempt(ctx context.Context, service, scope, secret string) (tok string, expiry time.Time, err error) {
-	params := url.Values{"service": {service}}
+	// The request URL is the configured endpoint with service and scope set on its query, so an endpoint
+	// that already carries query parameters stays well-formed (they are kept; ours win on a clash).
+	u, err := url.Parse(f.endpoint)
+	if err != nil {
+		return "", time.Time{}, &FetchError{class: classRequest, msg: "build token request", err: err}
+	}
+	params := u.Query()
+	params.Set("service", service)
 	if scope != "" {
 		params.Set("scope", scope)
+	} else {
+		params.Del("scope")
 	}
-	reqURL := f.endpoint + "?" + params.Encode()
+	u.RawQuery = params.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return "", time.Time{}, &FetchError{class: classRequest, msg: "build token request", err: err}
 	}

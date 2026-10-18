@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The token request URL is built with `url.Parse` and a merged query, so a `TOKEN_ENDPOINT` that already
+  carries a query parameter stays well-formed (it produced `?a=b?service=…` before).
 - README `cosign verify` is pinned to the publish workflow (`docker-publish.yml@refs/tags/v*`); the build
   example no longer names `v0.1.0`.
 

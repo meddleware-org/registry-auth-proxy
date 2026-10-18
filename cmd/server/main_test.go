@@ -160,3 +160,69 @@ func TestSecretRotationWithoutRestart(t *testing.T) {
 		t.Errorf("after the file changed: status %d body %q, want 200 without a restart", code, body)
 	}
 }
+
+// TestWiredRoutePolicy runs the wired server against a counting registry: only canonical registry read
+// routes reach it (audit F18). net/http's ServeMux answers 307 to the cleaned path for a raw path with an
+// empty, "." or ".." segment before the proxy handler runs; the handler refuses the rest (a trailing slash,
+// an encoded traversal, a path outside the registry API) itself.
+func TestWiredRoutePolicy(t *testing.T) {
+	var hits atomic.Int32
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer registry.Close()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1000)
+		_, _ = w.Write([]byte(`{"token":"t","expires_in":300}`))
+	}))
+	defer tokenSrv.Close()
+
+	secretFile := filepath.Join(t.TempDir(), "client-secret")
+	if err := os.WriteFile(secretFile, []byte("s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UPSTREAM_URL", registry.URL)
+	t.Setenv("TOKEN_ENDPOINT", tokenSrv.URL+"/token")
+	t.Setenv("CLIENT_SECRET_FILE", secretFile)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := serveOn(t, newServer("", newMux(cfg)))
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	for path, want := range map[string]int{
+		"//v2/_catalog":                http.StatusTemporaryRedirect,
+		"/v2//foo/tags/list":           http.StatusTemporaryRedirect,
+		"/v2/foo/./tags/list":          http.StatusTemporaryRedirect,
+		"/v2/foo/../bar/tags/list":     http.StatusTemporaryRedirect,
+		"/v2/_catalog/":                http.StatusBadRequest,
+		"/v2/foo%2F..%2Fbar/tags/list": http.StatusBadRequest,
+		"/v2/foo/blobs/uploads/abc":    http.StatusNotFound,
+		"/metrics":                     http.StatusNotFound,
+		"/":                            http.StatusNotFound,
+		"/v2/Foo/tags/list":            http.StatusNotFound,
+	} {
+		resp, err := client.Get(base + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("GET %s: status %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("refused paths reached the registry or the token service (hit count %d)", n)
+	}
+
+	resp, err := client.Get(base + "/v2/foo/tags/list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || hits.Load() == 0 {
+		t.Errorf("an allowed route: status %d, hits %d; want 200 through the registry", resp.StatusCode, hits.Load())
+	}
+}

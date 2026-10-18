@@ -309,3 +309,28 @@ func TestFetchConcurrentRotation(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestFetchKeepsEndpointQuery: an endpoint that already carries a query stays well-formed (F11); the
+// service and scope are added to it, and a stray scope in the endpoint does not survive an empty scope.
+func TestFetchKeepsEndpointQuery(t *testing.T) {
+	var got map[string][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		_, _ = w.Write([]byte(`{"token":"t","expires_in":300}`))
+	}))
+	defer srv.Close()
+
+	f := NewFetcher(srv.URL+"/token?tenant=a&scope=stray", "c", "s")
+	if _, _, err := f.Fetch(context.Background(), "reg", "repository:x:pull"); err != nil {
+		t.Fatal(err)
+	}
+	if got["tenant"][0] != "a" || got["service"][0] != "reg" || len(got["scope"]) != 1 || got["scope"][0] != "repository:x:pull" {
+		t.Errorf("query %v: want tenant kept, service and the one scope set", got)
+	}
+	if _, _, err := f.Fetch(context.Background(), "reg", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(got["scope"]) != 0 || got["tenant"][0] != "a" {
+		t.Errorf("empty scope: query %v, want no scope and tenant kept", got)
+	}
+}

@@ -34,9 +34,11 @@ origin-lock rows only).
 - Running in namespace `registry` (`k8s/base/registry/auth-proxy`, one replica, ClusterIP `:8181`, no
   Ingress). It is an internal cluster service, reached by joxit's nginx in the same namespace; joxit is
   published as `registry-ui.meddleware.co.uk` behind Cloudflare Access.
-- `docs/` (this audit) is still untracked in the repository (`git status`: `?? docs/`).
+- Fix wave 2026-10-18: **0.1.7** (local commit, release pending). The deployed image is still 0.1.6;
+  what this audit says about 0.1.7 is not live until it is released. `docs/` (this audit) is committed
+  with it.
 
-**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09
+**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18
 **Reviewer:** Internal review
 **Severity ceiling:** Medium.
 
@@ -47,10 +49,9 @@ origin-lock rows only).
   proxy *requests*. It cannot exceed what Keto grants the identity.
 - Realised ceiling at this pass: **Low** (every open item is Low or Info and none widens access).
 
-**Status:** re-verified 2026-10-09.
+**Status:** re-verified 2026-10-09; fix wave 2026-10-18 (0.1.7, release pending).
 
-- The baseline was supplied to this review and is **not committed** in the repo; this file is still
-  untracked (F12).
+- The baseline was supplied to this review; this file is committed with the 0.1.7 fix wave (F12).
 - **Corpus IDs F1–F13 are preserved.** New findings start at F14.
 - Two internal inconsistencies in the baseline were settled in the 2026-10-03 pass:
   - F1's header said RESOLVED while its body still said DEFERRED;
@@ -83,7 +84,7 @@ origin-lock rows only).
 | Auth role(s) | OAuth client (confidential, client credentials, through registry-token-service) and a credential-injecting proxy; it never issues or verifies tokens |
 | Identity provider | Ory Hydra and Keto, reached only through registry-token-service `GET /token` (in-cluster http, Basic auth) |
 | Token formats | Distribution registry Bearer JWT, opaque to the proxy (`token`, `expires_in`, `issued_at`) |
-| Signing / client credentials | `registry-browser` client secret — mounted file `CLIENT_SECRET_FILE` (Secret `registry-auth-proxy-secret`, mode 0440) — no rotation cadence fixed (F10); no signing key |
+| Signing / client credentials | `registry-browser` client secret — mounted file `CLIENT_SECRET_FILE` (Secret `registry-auth-proxy-secret`, mode 0440) — re-read after a token-service refusal since 0.1.7, no rotation cadence fixed (F10); no signing key |
 | Authorization model | Keto namespace `Registry`: `registry-browser` is `pullers` of `meddleware-org` and `listers` of `catalog`; the proxy adds its own request-side limit (read scopes only, F8) |
 
 **PROXY lens front matter:**
@@ -91,26 +92,30 @@ origin-lock rows only).
 | Field | Value |
 | --- | --- |
 | Upstreams | one origin, `UPSTREAM_URL` (`http://registry.registry.svc.cluster.local:5000`), set in the manifest and validated at startup (F1); the registry authenticates every request itself (Bearer), so there is no origin lock to enforce (F19) |
-| Public paths | every path, no inbound credential, `GET` and `HEAD` only (anything else is `405`); `/healthz` is local |
-| Body cap / timeouts | no request body is read or forwarded; `ReadHeaderTimeout` 10 s; `IdleTimeout` 120 s; `MaxHeaderBytes` 32 KiB; no `WriteTimeout` (blobs stream); upstream dial 5 s and response-header 30 s, no total deadline; 64 forwards in flight (B.PX-2) |
-| Trusted forwarding hops | one: joxit's nginx in the same namespace; the proxy uses no client address and sets no `X-Forwarded-*` of its own (F18) |
+| Public paths | the registry read routes only (`/v2/`, `/v2/_catalog`, `/v2/<name>/{tags/list,manifests,blobs,referrers}`; any other path is `404`/`400`, F18), no inbound credential, `GET` and `HEAD` only (anything else is `405`); `/healthz` is local |
+| Body cap / timeouts | no request body is read or forwarded; `ReadHeaderTimeout` 10 s; `IdleTimeout` 120 s; `MaxHeaderBytes` 32 KiB; no `WriteTimeout` (blobs stream); upstream dial 5 s and response-header 30 s, no total deadline; 64 forwards in flight (B.PX-2); the deadlines, the header cap and the bound are pinned by tests (F20) |
+| Trusted forwarding hops | one: joxit's nginx in the same namespace; the proxy uses no client address, sets no `X-Forwarded-*` of its own, and drops the ones it receives, with `Cf-*` (F18) |
 
-**Location:** `registry-auth-proxy/docs/audit/registry-auth-proxy-audit.md`. This directory is still
-untracked; committing this file also brings the baseline history into the repo (F12).
+**Location:** `registry-auth-proxy/docs/audit/registry-auth-proxy-audit.md` (committed with the 0.1.7 fix
+wave, F12).
 
 > **Access note:** the review ran against the workspace checkout `repos/registry-auth-proxy` at `main`
-> = `v0.1.6` (`7928960`) and the read-only manifests under `k8s/`. Nothing was changed, committed or
-> pushed.
+> = `v0.1.6` (`7928960`) and the read-only manifests under `k8s/`; nothing was changed in that pass. The
+> 2026-10-18 fix wave changed this repository only (0.1.7, a local commit; nothing pushed, tagged or
+> published) and left `k8s/` and the workspace documents untouched (the items for them are named in
+> F10, F12, F19, F21).
 
 ---
 
 ## Executive summary
 
-A small, stdlib-only proxy (about 1,100 lines of Go plus 1,100 lines of tests).
+A small, stdlib-only proxy (about 1,300 lines of Go plus 2,100 lines of tests).
 
-**Every finding of the 2026-10-03 pass was fixed in 0.1.4–0.1.6 and verified here against `v0.1.6`
-(`7928960`).** Coverage is now **93.8 / 94.1 / 86.8%** for proxy / token / config (37 test functions,
-79 runs with subtests; `cmd/server` 0%). Verified in code and tests:
+**Every finding of the 2026-10-03 pass was fixed in 0.1.4–0.1.6 and verified against `v0.1.6`
+(`7928960`); the 2026-10-18 fix wave (0.1.7, release pending) then closed the lens items F17, F18, F20
+and F22 and the documentation and rotation gaps F10 and F12.** Coverage on the 0.1.7 tree is
+**96.9 / 95.5 / 86.7 / 38.6%** for proxy / token / config / `cmd/server` (59 test functions, 142 runs with
+subtests). Verified in code and tests:
 
 - **Read-only by construction (F7, F8; 0.1.4).** Only `GET` and `HEAD` are forwarded (`405` before
   any upstream or token-service call) and no request body is read, so the 32 MiB replay buffer is
@@ -129,31 +134,47 @@ A small, stdlib-only proxy (about 1,100 lines of Go plus 1,100 lines of tests).
   reusable workflow, scans the published image with Trivy before cosign signs it, and prints a pinned
   `cosign verify`; `go.mod` names `toolchain go1.26.9`, the Dockerfile builder is pinned to that patch
   and fails on a mismatch (the 1.26.7 stdlib had eleven advisories, GO-2026-6607…6617).
+- **0.1.7 (2026-10-18).**
+  - *Route allowlist (F18).* Only `/v2/`, `/v2/_catalog` and the four per-repository read routes
+    (`tags/list`, `manifests`, `blobs`, `referrers`), with the registry's own name, tag and digest
+    grammars, are forwarded, in canonical form and never rewritten; everything else is `404` or `400`
+    before any token or upstream call. `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`,
+    `Cdn-Loop` and `Cf-*` (the Access assertion) no longer reach the registry.
+  - *Limits exercised (F20).* A stalled upstream, a dial that never completes, a slow body, the
+    in-flight bound and the 32 KiB header cap are driven against local servers; the production values
+    are pinned.
+  - *Rotation (F10).* `CLIENT_SECRET_FILE` is read again, once, after a token-service `401`; a changed
+    value is retried, so a rotation needs no restart. Procedure and compromise steps are in `SECURITY.md`.
+  - *Logs (F17).* A token-fetch failure is logged by class and status, never with the endpoint URL.
+  - *Image and docs (F22, F12).* Licence notices (Go standard library, the CA bundle's MPL-2.0 copyright
+    file, `LICENSE`) ship in `/usr/share/doc/registry-auth-proxy/` and an `image` CI job checks them;
+    `SECURITY.md` states the transport (decision D18) and the rotation procedure; the README `cosign
+    verify` is pinned to the publish workflow.
 - Unchanged and still holding: inbound `Authorization` stripped, fail-closed `502` on a token-fetch
   error, `401→403` remap after a token is attached, a file-only client secret never logged, upstream
   redirects not followed, `..` traversal rejected, config URL validation, and spec-conformant token
   expiry (default 60 s; issue time = min(`issued_at`, local clock)).
 
-**Findings after this pass: 22 — 9 RESOLVED, 5 MITIGATED, 2 ACCEPTED-RISK, 4 DEFERRED, 2 Positive.**
+**Findings after this pass: 22 — 13 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive.**
 Nothing is Medium or higher; every open item is Low or Info and none widens access.
 
 - **F5 corrected (Low, MITIGATED).** The baseline called the plaintext hop to the token service
   RESOLVED by "WireGuard + SPIFFE mutual authentication". The platform no longer runs mutual
   authentication (decision D18) and WireGuard protects only inter-node traffic; the cluster is one
-  node. The hop is plain in-cluster HTTP bounded by NetworkPolicy and Cloudflare Access in front of
-  the UI.
-- **Lens items found open (all Low or Info):**
-  - F17 (ACCEPTED-RISK): a token-fetch failure still logs the token endpoint URL;
-  - F18 (ACCEPTED-RISK): the forwarding policy is a denylist and any `GET`/`HEAD` path is forwarded;
-  - F19 (MITIGATED): the proxy's own door is bounded by NetworkPolicy and Access, with no scheduled
-    negative check;
-  - F20 (DEFERRED): the new deadlines and header cap are configured but not exercised by tests;
-  - F21 (MITIGATED): the Hydra client is registered with a `registry:push` scope that only Keto and
-    the proxy now withhold.
-- **Still deferred to the pre-mainnet gate:** the credential-rotation procedure for the
-  `registry-browser` secret (F10); documentation that still lacks the transport protection, the
-  workflow-pinned `cosign verify` command and a committed audit (F12); tests for the new deadlines and
-  header cap (F20); and licence notices in the image (F22).
+  node. The hop is plain in-cluster HTTP bounded by NetworkPolicy, client-secret authentication at the
+  token service and Cloudflare Access in front of the UI. `SECURITY.md` now says so (0.1.7).
+- **Closed by the 0.1.7 fix wave:** F17, F18, F20, F22 (RESOLVED).
+- **Still MITIGATED, with the remainder outside this repository or a maintainer task:**
+  - F10: the procedure is documented and rotation is restart-free; the rehearsal, a cadence and a
+    last-rotation record are maintainer tasks, and `SECRETS.md` / `docs/auth/OPERATIONS.md` need the
+    proxy's Secret added (named in F10);
+  - F12: the base Deployment manifest still names tag `0.1.1` (`k8s/`, platform);
+  - F19: the proxy's own door is bounded by NetworkPolicy and Access; narrowing `:8181` to the
+    `registry-ui` pod and a scheduled negative check are platform items;
+  - F21: the Hydra client is registered with a `registry:push` scope that only Keto and the proxy
+    withhold (platform manifest).
+- **Still deferred to the pre-mainnet gate:** the rotation rehearsal and cadence (F10), limits sized and
+  measured for the plan tier (F20 remainder), and external review.
 
 **Posture:**
 
@@ -169,17 +190,17 @@ Nothing is Medium or higher; every open item is Low or Info and none widens acce
 
 | Actor | Holds / proves | Can do | Bounded by |
 | --- | --- | --- | --- |
-| Browser UI / same-namespace client (joxit's nginx; anyone who can drive the UI) | reachability to :8181; no credential. The public UI is behind Cloudflare Access | send `GET`/`HEAD` for any path with any headers; drive scope prediction and cache keys | read-only upstream identity; `405` for other methods, no body forwarded (F8); scope-exact bounded cache (F3, F7); 64 in flight (F15); `ReadHeaderTimeout` and 32 KiB headers; 401→403 remap; traversal reject. **Any path is forwarded (F18)** |
+| Browser UI / same-namespace client (joxit's nginx; anyone who can drive the UI) | reachability to :8181; no credential. The public UI is behind Cloudflare Access | send `GET`/`HEAD` for a registry read route with any headers; drive scope prediction and cache keys | read-only upstream identity; `405` for other methods, no body forwarded (F8); scope-exact bounded cache (F3, F7); 64 in flight (F15); `ReadHeaderTimeout` and 32 KiB headers; 401→403 remap; route allowlist and canonical-path check (F18); `X-Forwarded-*`/`Cf-*` dropped (F18) |
 | On-path attacker (proxy ↔ token service) | plaintext in-cluster HTTP on one node | observe the Basic-auth secret and issued tokens | NetworkPolicy, one node, WireGuard between nodes only; no mutual authentication (F5) |
 | Malicious / compromised upstream registry | operator config, or MITM | craft `WWW-Authenticate` (`service`, `scope`); huge bodies; cookies, CORS grants, `Connection`-named fields, redirects | fetcher 10 s timeout + 64 KiB cap; redirects not followed (F4); streamed responses; quote-aware parse and a read-only scope filter (F8); response filtering (F14); 30 s response-header deadline (F15) |
 | Token service / IdP (registry-token-service → Hydra, Keto) | the authority | issue tokens with the granted intersection | fail-closed 502 here; its own audit |
-| Operator | env + mounted Secret | misconfigure URLs or identity scope; rotate the secret | URL validation at startup (F1). **Rotation is documented only at workspace level (F10)** |
+| Operator | env + mounted Secret | misconfigure URLs or identity scope; rotate the secret | URL validation at startup (F1). Rotation: `SECURITY.md` procedure, restart-free (F10) |
 
 ### Forwarding matrix (PROXY lens)
 
 | Actor | Controls | Bounded by |
 | --- | --- | --- |
-| Client | method, path, query, every header (body is never read) | §A route policy (`GET`/`HEAD` only; `..` rejected, F18 for the rest), header policy (F14), limits (F15) |
+| Client | method, path, query, every header (body is never read) | §A route policy (`GET`/`HEAD` only; the read-route allowlist and canonical paths, F18), header policy (F14, F18), limits (F15, F20) |
 | Upstream (the registry) | status, headers, body, redirects, timing | response filtering (F14), redirects not followed (F4), deadlines (F15), streamed bodies |
 | A party on the path to the upstream | the same, on plain in-cluster HTTP | NetworkPolicy and a single node (F5); the registry's own Bearer check |
 | State store behind the gate | none: the token cache is in process memory | — |
@@ -189,10 +210,10 @@ Nothing is Medium or higher; every open item is Low or Info and none widens acce
 
 | Authority / credential | Holder | What it confers | Misuse / compromise impact | Rotation / revocation plan |
 | --- | --- | --- | --- | --- |
-| OAuth client secret (`registry-browser`, confidential client, client credentials) | this service (`CLIENT_SECRET_FILE`, read once at startup); the same value sits in `hydra-client-secrets` | tokens for the identity's Keto grants (pull + catalog) | registry read access as `registry-browser` | workspace procedure `docs/auth/OPERATIONS.md` "Rotate a client secret", then restart the pod (the file is not re-read); no cadence, no compromise procedure in this repo (F10) |
+| OAuth client secret (`registry-browser`, confidential client, client credentials) | this service (`CLIENT_SECRET_FILE`, read at startup and again after a token-service refusal); the same value sits in `hydra-client-secrets` | tokens for the identity's Keto grants (pull + catalog) | registry read access as `registry-browser` | `SECURITY.md` "Client-secret rotation and compromise" (both Secrets, then the `hydra-client-setup` Job per `docs/auth/OPERATIONS.md`; the proxy re-reads the file on the resulting `401`, restart as fallback); no cadence or rehearsal record (F10) |
 | Registry Bearer token (Distribution JWT) | in-memory per-scope cache | the token's `access` claim for its TTL | replay within the TTL | short TTL from the token service; scope-exact key (F7); margin `TOKEN_REFRESH_MARGIN` (30 s); evicted when the registry refuses it |
 | Keto relations for `registry-browser` | platform | which repositories and actions | widening them no longer widens the proxy: it requests only read scopes (F8) | registry-token-service audit |
-| Cloudflare Access session of the human using the UI | the browser, then joxit's nginx | reaching the UI at all | a leaked Access JWT header is forwarded to the registry (F18) | Cloudflare Access (PLATFORM lens) |
+| Cloudflare Access session of the human using the UI | the browser, then joxit's nginx | reaching the UI at all | a leaked Access JWT header is no longer forwarded to the registry (F18, 0.1.7) | Cloudflare Access (PLATFORM lens) |
 
 ---
 
@@ -202,9 +223,9 @@ Critical / High / Medium / Low / Info / Positive.
 
 ## Scope
 
-- **In scope (`v0.1.6` = `7928960`, `main` HEAD):**
+- **In scope (`v0.1.6` = `7928960`; the 0.1.7 working tree for the fix wave):**
   - `cmd/server/main.go`, `internal/{config,proxy,token}/**` and tests
-  - `Dockerfile`, `.dockerignore`, `go.mod`, `.env.example`
+  - `Dockerfile`, `.dockerignore`, `go.mod`, `.env.example`, `scripts/*.sh` (image notices)
   - `.github/workflows/{go-ci,docker-publish}.yml`, `.github/dependabot.yml`
   - `README.md`, `CLAUDE.md`, `AGENTS.md`, `SECURITY.md`, `CHANGELOG.md`, `llms.txt`
   - read-only: `k8s/base/registry/{auth-proxy,networkpolicy.yaml,registry-ui}`,
@@ -216,18 +237,22 @@ Critical / High / Medium / Low / Info / Positive.
   - the registry credential inventory (maintainer item, `OPERATOR_TASKS.md` "Image registry
     credentials", before mainnet);
   - the Go stdlib.
-- **Environment (2026-10-09, local Go 1.27.1 with `GOTOOLCHAIN=local`; CI uses 1.26.9):**
+- **Environment (2026-10-18, 0.1.7 tree, `GOTOOLCHAIN=go1.26.9`, the toolchain `go.mod` names; the 2026-10-09
+  pass used local Go 1.27.1):**
 
 | Command | Result |
 | --- | --- |
-| `go vet ./...` | clean |
-| `go test -race -cover ./...` | ok — `internal/proxy` **93.8%**, `internal/token` **94.1%**, `internal/config` **86.8%**, `cmd/server` 0%; 37 test functions (79 runs with subtests) |
+| `go vet ./...`, `gofmt -l` | clean |
+| `go test -race -cover ./...` | ok — `internal/proxy` **96.9%**, `internal/token` **95.5%**, `internal/config` **86.7%**, `cmd/server` **38.6%**; 59 test functions (142 runs with subtests), none skipped; the limit tests take about 4 s in all |
+| golangci-lint v2.13.0, govulncheck v1.8.0 | `0 issues`; `No vulnerabilities found` |
+| `CONTAINER_CLI=podman sh scripts/check-image-notices.sh` | `image notices OK` (rootless podman build of the Dockerfile; the notices and `LICENSE` are present in the image) |
 | Registries (2026-10-10) | quay.io and Docker Hub tag `0.1.6` both resolve to `sha256:d98c347c…1581`, equal to `config/images.yaml` and the overlay pin |
 | Live (2026-10-10) | `GET` and `POST https://registry-ui.meddleware.co.uk/v2/_catalog` without a session answer `302` to the Cloudflare Access login: the UI that fronts the proxy is not anonymous |
-| govulncheck / golangci-lint | run in CI (pinned v1.8.0 and v2.13.0); the `0.1.6` image exists on both registries, and the publish job runs only after the CI-equivalent `verify` job passes; the local binaries were not re-run here |
+| Registries (2026-10-18) | not re-checked: 0.1.7 is not released, the deployed image is 0.1.6 |
 | 2026-10-03 scratch probes (F3, F7, F8, F11) | superseded: each scenario is now a committed test (see the findings) |
 
-  The working tree was left clean.
+  The 2026-10-09 results above are kept as the baseline of the 0.1.6 review; the 2026-10-18 rows are the
+  0.1.7 tree.
 
 ---
 
@@ -246,16 +271,19 @@ Critical / High / Medium / Low / Info / Positive.
   removed the contradiction.*
 **Remediation / evidence (2026-10-09):** unchanged at `v0.1.6`; every required value missing, or a
 non-http(s) or host-less URL, exits non-zero at startup (PX-M9). A query string in `TOKEN_ENDPOINT` is
-still accepted (F11).
+still accepted and, since 0.1.7, merged correctly into the request URL (F11).
 
 ### F2 — Scope prediction emitted malformed scopes from crafted paths
-**Severity:** Low–Medium   **Disposition:** RESOLVED (re-verified 2026-10-09)
-**Where:** `internal/proxy/scope.go:58-70` (`NormalizePath` cleans the path, rejects any `..`
-segment, and keeps `/v2` requests under `/v2`); `handler.go:166-172` (400 `invalid path`);
-`PredictScope` normalises first. Tested by `TestNormalizePath` and `TestPredictScope`.
-**Note:** this closes *traversal-based* key minting only. Unique repository names still mint keys,
-now bounded by the cache cap (F3). Empty and `.` segments are cleaned for prediction but forwarded as
-sent (F18).
+**Severity:** Low–Medium   **Disposition:** RESOLVED (re-verified 2026-10-09; strengthened 2026-10-18)
+**Where (0.1.6):** `NormalizePath` cleaned the path, rejected any `..` segment and kept `/v2` requests
+under `/v2`; the handler answered `400 invalid path`; `PredictScope` normalised first. Tested by
+`TestNormalizePath` and `TestPredictScope`.
+**Where (0.1.7):** `Route` in `internal/proxy/scope.go` replaces `NormalizePath`: it rejects any empty,
+`.` or `..` segment (and a trailing slash) with `400 invalid path`, and the repository name that becomes
+the cache key must match the registry's name grammar (F18). Tested by `TestRoute`, `TestPredictScope`,
+`TestForward_OnlyRegistryReadRoutes`, `TestWiredRoutePolicy`.
+**Note:** unique repository names still mint keys, now bounded by the cache cap (F3). Empty and `.`
+segments are no longer cleaned for prediction and forwarded as sent: they are refused (F18).
 
 ### F3 — Token cache has no size bound (memory and amplification) — **re-opened**
 **Severity:** Low   **Disposition:** MITIGATED (re-opened 2026-10-03; the bound and single-flight
@@ -292,7 +320,7 @@ landed in 0.1.4, `e1ed1c8`; the load-amplification residual is accepted, S3)
   inside the refresh margin is not stored. Tests: `TestCacheIsBounded`, `TestCacheEvictionKeepsEmptyScope`,
   `TestCacheSkipsTokenAlreadyInsideMargin`, `TestCacheExpiredEntryDeleted`.
 - **Single flight.** `token.Flight` (`flight.go`) collapses concurrent misses for one `service`+scope
-  into one token request, detached from any one caller's context (`handler.go:239-252`). Tests:
+  into one token request, detached from any one caller's context (`handler.go:281-294`). Tests:
   `TestFlightSharesOneFetch`, `TestFlightDoesNotCacheResultsOrErrors`, `TestFlightKeysAreIndependent`,
   `TestServeHTTP_ConcurrentMissesShareOneTokenRequest`.
 - **Residual (accepted).** Distinct repository names still each cost one probe and one token request;
@@ -303,11 +331,11 @@ landed in 0.1.4, `e1ed1c8`; the load-amplification residual is accepted, S3)
 
 ### F4 — Upstream redirects no longer auto-followed
 **Severity:** Low   **Disposition:** RESOLVED (redirect half, re-verified 2026-10-09 —
-`handler.go:129-131` `CheckRedirect` → `http.ErrUseLastResponse`; `TestServeHTTP_DoesNotFollowUpstreamRedirect`).
+`handler.go:163-165` `CheckRedirect` → `http.ErrUseLastResponse`; `TestServeHTTP_DoesNotFollowUpstreamRedirect`).
 The `service`/`scope` forwarding half the baseline left open is now resolved as **F8**.
-**Note:** the test redirects the unauthenticated probe, so it pins the probe leg; the credentialed
-retry uses the same client and the same `CheckRedirect`, but a recording upstream asserting that no
-credential reaches a foreign `Location` on that leg would match the PROXY lens test exactly (C.1).
+**Note (2026-10-18):** `TestServeHTTP_DoesNotFollowUpstreamRedirect` pins the probe leg; the credentialed leg is now
+pinned by `TestForward_NoCredentialReachesAForeignRedirectTarget` (a recording second server receives no
+request, and the redirect is returned unchanged).
 
 ### F5 — Plaintext HTTP to the token service carries the Basic-auth secret and Bearer tokens
 **Severity:** Low (deployment-dependent)   **Disposition:** MITIGATED (corrected 2026-10-09; the
@@ -332,8 +360,15 @@ authentication on proxy → token service; `k8s/base/kube-system/cilium/values.y
   honest state. Moving to a second node adds WireGuard but not mutual authentication.
 
 **Correction (2026-10-03):** the baseline said this is "Documented in `SECURITY.md`". It is not:
-SECURITY.md contains no WireGuard, SPIFFE, mTLS or NetworkPolicy text (F12). SECURITY.md also makes
+SECURITY.md contained no WireGuard, SPIFFE, mTLS or NetworkPolicy text (F12). SECURITY.md also made
 no false claim about it.
+
+**Documentation (2026-10-18, 0.1.7):** `SECURITY.md` now has "Transport to the token service and the
+registry": plaintext in-cluster HTTP, **not mutually authenticated** (decision D18), bounded by the
+`registry` namespace NetworkPolicy (whole-namespace admission stated, F19), client-secret authentication
+at the token service, the read-only grants, and the single node (WireGuard between nodes only). Written
+consistently with the registry-token-service wording. The disposition stays MITIGATED: the hop is still
+plaintext.
 
 ### F6 — Response splitting / header injection not exploitable
 **Severity:** Positive (re-verified 2026-10-09) — header copy uses `Header().Add`. Go rejects CR/LF in
@@ -344,11 +379,11 @@ are now filtered in both directions as well (F14).
 
 **Severity:** Low (availability of registry browsing; any UI user can trigger it)
 **Disposition:** RESOLVED (0.1.4, `e1ed1c8`)
-**Where (at 2026-10-03):** `internal/proxy/handler.go:157-186`.
+**Where (at 2026-10-03):** `internal/proxy/handler.go:204-223`.
 
 - `resolvedScope` is the challenge scope.
 - `h.cache.Set(resolvedScope, …)` **and** `h.cache.Set(predictedScope, tok, …)` when they differ.
-- `PredictScope` always predicts `:pull` (`scope.go:16-46`).
+- `PredictScope` always predicts `:pull` (`scope.go:8-36`).
 
 **Issue (probe-verified with a Keto-like token service that grants only pull):**
 
@@ -372,7 +407,7 @@ repository's pages, repeatedly. There is no privilege gain.
 
 **Remediation / evidence (2026-10-09):**
 
-- `Handler.token` (`handler.go:239-252`) caches only under the scope it fetched for; the second `Set`
+- `Handler.token` (`handler.go:281-294`) caches only under the scope it fetched for; the second `Set`
   under the predicted alias is gone. `proxyWithToken` evicts a token the registry refuses
   (`:275`), so a wrong-scope token cannot linger.
 - `DELETE` can no longer start the sequence at all: it is `405` before any probe (F8).
@@ -384,7 +419,7 @@ repository's pages, repeatedly. There is no privilege gain.
 
 **Severity:** Low (defence in depth; Keto remains the authority)   **Disposition:** RESOLVED (0.1.4,
 `e1ed1c8`)
-**Where (at 2026-10-03):** `internal/proxy/handler.go:103-120` (bodies buffered for any method),
+**Where (at 2026-10-03):** `internal/proxy/handler.go:133-154` (bodies buffered for any method),
 `:157-169` (the challenge scope is used verbatim), `:219-251` (the method is forwarded);
 `cmd/server/main.go:186-188` (no method guard); SECURITY.md invariant 4; CLAUDE.md "This proxy is
 read-only (pull + catalog)".
@@ -409,14 +444,14 @@ delete access through the UI. The proxy's stated invariant does not hold.
 **Remediation / evidence (2026-10-09):**
 
 - **Methods.** `ServeHTTP` answers anything but `GET`/`HEAD` with `405` and `Allow: GET, HEAD` as its
-  first step (`handler.go:142-146`); `roundTrip` builds the upstream request with no body (`:292`), so
+  first step (`handler.go:176-180`); `roundTrip` builds the upstream request with no body (`:292`), so
   nothing is read or buffered and the 32 MiB cap is gone. Test: `TestServeHTTP_OnlyGetAndHead`
   (PUT, POST, DELETE, PATCH, OPTIONS → 405; neither the upstream nor the token service is hit),
   `TestServeHTTP_HeadIsForwarded`.
 - **Scopes.** `readOnlyScope` (`challenge.go:455-473`) admits only `registry:catalog:*` and
   `repository:<name>:pull`, checking every space-separated entry; anything else, including
   `pull,push`, `delete`, `*`, an unknown type or a malformed entry, is `403` with no token request
-  (`handler.go:211-218`). Tests: `TestServeHTTP_RefusesNonReadChallenge` (seven refused scopes, token
+  (`handler.go:248-255`). Tests: `TestServeHTTP_RefusesNonReadChallenge` (seven refused scopes, token
   service never called), `TestReadOnlyScope`.
 - **Parser.** Quote-aware (F11), so the accidental `pull,push` truncation no longer decides anything.
 - **Read-only no longer rests on Keto alone**: the Keto tuples (`pullers`, `listers`), the proxy's
@@ -463,43 +498,64 @@ This is the same pattern as static-server F2.
 ### F10 — Client-secret rotation is undocumented, and the secret is read only at startup
 
 **Severity:** Info (AUTH B.AUTH-1: "a credential without a rotation plan is a finding")
-**Disposition:** DEFERRED (pre-mainnet gate "key rotation rehearsed; compromise procedure
-documented", Section D; the rehearsal is a maintainer task)
-**Where:** `internal/config/config.go:497-504` (read once); README, SECURITY.md and CLAUDE.md (no
+**Disposition:** MITIGATED (0.1.7, commit pending: the procedure and the compromise steps are documented
+and the proxy re-reads the secret file after a refusal, so a rotation needs no restart; the rotation
+rehearsal, a cadence and a last-rotation record are maintainer tasks, Section D)
+**Where (0.1.6):** `internal/config/config.go` (read once); README, SECURITY.md and CLAUDE.md (no
 "rotat…" anywhere).
+**Where (0.1.7):** `internal/token/fetcher.go` (`WithSecretReload`, `Fetch`, `refreshSecret`),
+`internal/config/config.go` (`ReadSecret`, `Config.SecretFile`), `cmd/server/main.go` (`newMux`);
+`SECURITY.md` "Client-secret rotation and compromise"; README "Secret rotation"; `.env.example`.
 
-**Issue / Impact:**
+**Issue / Impact (0.1.6):**
 
 - Rotating the `registry-browser` secret in Hydra makes every token fetch fail (fail-closed `502`)
   until the pod restarts with the new Secret.
-- There is no documented sequence (dual-secret overlap in Hydra if supported, update the Secret,
-  roll the deployment) and no compromise procedure.
+- There was no documented sequence and no compromise procedure.
 
-**Remediation / evidence:**
+**Remediation / evidence (2026-10-18):**
 
-- Document rotation and compromise steps in SECURITY.md.
-- Optionally re-read `CLIENT_SECRET_FILE` on a `401` from the token service (kubelet updates mounted
-  Secrets in place), or watch the file.
-
-**Status (2026-10-09):** code and repo documents are unchanged (read once; no rotation text). What
-exists is workspace-level: `docs/auth/OPERATIONS.md` "Rotate a client secret" (put the new value in
-`hydra-client-secrets`, re-run the `hydra-client-setup` Job, which replaces the client so the old
-secret stops working at once, then update the consumers — "the registry auth proxy" among them), and
-the token-service runbook defers to it. The gaps are specific:
-
-- the proxy reads the file once, so its pod must be restarted after the Job runs, and until then every
-  token fetch fails closed (`502`) — the procedure does not say so;
-- the proxy's copy is a separate Secret, `registry-auth-proxy-secret` (the same value, written by
-  `bootstrap/profiles/single-node.sh` and `recover-secrets.sh`), which `SECRETS.md` does not list;
-- no cadence, no recorded last-rotation date and no compromise procedure for this credential.
-
-None is exploitable; the impact of a missed step is a self-inflicted browse outage.
+- **Decision rule.** Re-reading the file on a `401` is the small, safe change S4 named, and it is
+  consistent with the invariants: the secret stays in `CLIENT_SECRET_FILE` and in process memory only,
+  is never logged and never an environment variable; there is no watcher or background goroutine
+  (CLAUDE.md "What not to do" now says so).
+- **Mechanism.** On a `401` from the token service the fetcher calls the reload function, which reads
+  the file; if the value differs from the one the request used, the fetch is retried **once** with it
+  (concurrent fetches that find the secret already replaced retry without another read); an unchanged
+  or unreadable file leaves the original `401` failure, so the request still fails closed (`502`).
+  Only `401` triggers a read: a `5xx` or a transport failure does not. The log lines name no value
+  and no path (`client secret reloaded after the token service refused the credentials`; on a read
+  failure `cause: unreadable`).
+- **Tests:** `TestFetchRereadsRotatedSecret` (no read on success; one read and one retry after the
+  rotation; the next fetch needs neither; no secret in the log), `TestFetchRotationFailsClosed` (file
+  unchanged, file unreadable, no reloader: one request and at most one read), `TestFetchOtherFailuresDoNotReload`,
+  `TestFetchConcurrentRotation` (16 concurrent fetches across a rotation, race-clean),
+  `TestReadSecret`, `TestLoadRecordsSecretFile`, and end to end through the wired proxy
+  `TestSecretRotationWithoutRestart` (fake registry and token service, a real file: closed `502` while the
+  file is stale, `200` after it changes, no restart).
+- **Procedure.** `SECURITY.md`: generate; update **both** `hydra-client-secrets`
+  (`browser-client-secret`) and `registry-auth-proxy-secret` (`client-secret`); wait for the kubelet to
+  refresh the mounted file (not a `subPath` mount, so it updates in place); re-run the
+  `hydra-client-setup` Job (the old secret stops working at once); the proxy recovers on the next token
+  request, with `kubectl -n registry rollout restart deployment/registry-auth-proxy` as the fallback.
+  The compromise procedure is the same steps with the new value at once, then a review of the token
+  service and registry logs. Hydra holds one secret per client, so there is no overlap window to
+  rehearse beyond the Secrets-first ordering.
+- **Outside this repository (mention only, not edited):**
+  - `SECRETS.md` should list `registry-auth-proxy-secret` (namespace `registry`, key `client-secret`,
+    SOPS source `registry/auth-proxy-secret.enc.yaml`, written by `bootstrap/profiles/single-node.sh`
+    and `recover-secrets.sh`) and say it must equal `browser-client-secret` in `hydra-client-secrets`;
+  - `docs/auth/OPERATIONS.md` "Rotate a client secret" step 4 should name that Secret and say the proxy
+    needs no restart if the Secret is updated before the Job runs (restart as the fallback).
+- **Maintainer:** a rotation cadence, a recorded last-rotation date, and one rehearsal against the live
+  cluster (`OPERATOR_TASKS.md`).
 
 ### F11 — Challenge parsing and fetch-URL details
 
-**Severity:** Info   **Disposition:** MITIGATED (parser and body-read halves RESOLVED in 0.1.4; the
-query-string and health-endpoint halves accepted)
-**Where (at 2026-10-03):** `handler.go:281-306`, `fetcher.go:204-209`.
+**Severity:** Info   **Disposition:** MITIGATED (parser and body-read halves RESOLVED in 0.1.4, the
+query-string half in 0.1.7; the multiple-scope behaviour is by design and the health endpoint is
+process liveness only)
+**Where (at 2026-10-03):** `handler.go:323-348`, `fetcher.go:204-209`.
 
 - **Not quote-aware.** `parseBearerChallenge` splits on `,` without honouring quoted strings:
   `pull,push` is truncated (F8), and a `realm` containing a comma shifts parsing.
@@ -525,8 +581,10 @@ deadline.
 - **Multiple scopes — unchanged by design.** `readOnlyScope` now vets every entry, but the list still
   goes to the token service as one `scope` value (`fetcher.go:368-372`); how it is read is the token
   service's (registry-token-service F16). The registry's challenges for the UI's requests name one scope each, so this is dormant.
-- **Endpoint query string — ACCEPTED-RISK.** `fetcher.go:372` still concatenates `?`; the deployed
-  `TOKEN_ENDPOINT` has no query and is operator-set in the manifest.
+- **Endpoint query string — RESOLVED (0.1.7, commit pending).** The fetch URL is now built with
+  `url.Parse` and `Query().Set`, so an endpoint that already carries a query stays well-formed (its
+  parameters are kept, a stray `scope` does not survive an empty scope). Test:
+  `TestFetchKeepsEndpointQuery`. The deployed `TOKEN_ENDPOINT` has no query; this removes the footgun.
 - **Body hold — moot.** No request body is read (F8); `ReadHeaderTimeout` is 10 s, so there is nothing
   for a `ReadTimeout` to bound. The missing `WriteTimeout` stays intentional (blobs stream).
 - **`/healthz`** is process liveness only and is documented as such in the README endpoint table; it
@@ -534,37 +592,44 @@ deadline.
 
 ### F12 — Documentation drift
 
-**Severity:** Info   **Disposition:** DEFERRED (pre-mainnet documentation gate, Section D; committing
-`docs/` is a maintainer action)
+**Severity:** Info   **Disposition:** MITIGATED (0.1.7, commit pending: every item that lives in this
+repository is fixed; the base Deployment manifest tag is in `k8s/`, outside it)
 
-- SECURITY.md invariant 4 ("predicts and requests only `pull` and `catalog`") is false for requests
-  (F8). CLAUDE.md "read-only" describes the identity, not the proxy (F8).
-- SECURITY.md does not document the transport protection F5 relies on. The baseline claimed it did.
+- SECURITY.md invariant 4 ("predicts and requests only `pull` and `catalog`") was false for requests
+  (F8). CLAUDE.md "read-only" described the identity, not the proxy (F8).
+- SECURITY.md did not document the transport protection F5 relies on. The baseline claimed it did.
 - No secret-rotation procedure anywhere (F10).
-- The baseline audit (2026-09-18) is not committed. It also contained the F1 and I14 contradictions
-  noted above. Commit this file as `docs/audit/registry-auth-proxy-audit.md`.
+- The baseline audit (2026-09-18) was not committed. It also contained the F1 and I14 contradictions
+  noted above.
 
-**Status (2026-10-09):**
+**Status (2026-10-18, 0.1.7):**
 
 - **Fixed in 0.1.4:** SECURITY.md invariants 4 and 5, CLAUDE.md invariants 3–4 and the README /
-  AGENTS.md request flow now describe the code (read-only by construction, scope-exact bounded
-  cache); CLAUDE.md also records the 0.1.6 forwarding rules.
-- **Still open:**
-  - SECURITY.md has no transport text (F5) and no rotation text (F10);
-  - the README's `cosign verify` example accepts `meddleware-org/registry-auth-proxy/.*`, any workflow
-    in the repository; the Publish job summary prints the pinned regexp (IMG *Verification command*,
-    the same finding as registry-token-service F22);
-  - the README build example uses `v0.1.0`;
-  - `k8s/base/registry/auth-proxy/deployment.yaml` still names tag `0.1.1` (the overlay replaces it
-    with the 0.1.6 digest, so the cluster is correct; the base alone would run 0.1.1);
-  - `docs/` is untracked (`git status`: `?? docs/`).
+  AGENTS.md request flow describe the code (read-only by construction, scope-exact bounded cache);
+  CLAUDE.md also records the 0.1.6 forwarding rules.
+- **Fixed in 0.1.7:**
+  - SECURITY.md has "Transport to the token service and the registry" (plaintext in-cluster HTTP, no
+    mutual authentication per decision D18, NetworkPolicy, client-secret authentication, single node;
+    consistent with F5 and with registry-token-service) and "Client-secret rotation and compromise"
+    (F10); invariant 1 mentions the re-read; a new invariant 7 and a "Forwarding policy" section state
+    the route allowlist, the stripped fields and the limits (F18, F15);
+  - the README `cosign verify` example now pins `docker-publish.yml@refs/tags/v*` (the same regexp the
+    publish job summary prints), and the build example no longer names `v0.1.0`;
+  - CLAUDE.md, AGENTS.md, `llms.txt`, the README and `.env.example` describe the route allowlist, the
+    re-read, the notices and the new tests;
+  - `docs/` (this audit) is committed with the release commit.
+- **Still open, outside this repository:** `k8s/base/registry/auth-proxy/deployment.yaml` names tag
+  `0.1.1` (the cluster overlay replaces it with the 0.1.6 digest, so the cluster is correct; the base
+  alone would run 0.1.1). Platform item: bump or remove the tag in the base, or make the base reference
+  the placeholder the overlay already replaces. Not edited here.
 
 ### F13 — Positive: credential handling and fail-closed behaviour are implemented and tested
 
 **Severity:** Positive (re-verified 2026-10-09)
 
 - **Secret custody.** The client secret is read only from `CLIENT_SECRET_FILE` (non-empty, trimmed),
-  never from env, never logged. Error messages include URLs and scope, never credentials.
+  never from env, never logged (since 0.1.7 it is also re-read from that file after a token-service
+  refusal, F10). Error messages never contain credentials.
   `.dockerignore` excludes `client-secret`, `*.key`, `*.pem` and `.env*` (AUTH-M2).
 - **Fail closed.** A token-service error or non-200 → `502` (`TestServeHTTP_TokenFailureIsBadGateway`),
   never a naked `401` (AUTH-M4).
@@ -585,7 +650,7 @@ deadline.
 
 **Severity:** Low (hardening of a credential-injecting hop)   **Disposition:** RESOLVED (0.1.6,
 `7928960`)
-**Where:** `internal/proxy/handler.go:54-86` (hop-by-hop set, `viaToken`, `requestDropped`,
+**Where:** `internal/proxy/handler.go:55-103` (hop-by-hop set, `viaToken`, `requestDropped`,
 `responseDropped`), `:148-154` (loop check), `:297-311` (request policy), `:321-347` (response policy
 and `connectionNamed`), `:358-361` (`isCORS`); `internal/proxy/forwarding_test.go`.
 **Issue (before 0.1.6):** only the fixed RFC 9110 hop-by-hop set was removed. A field named in the
@@ -609,14 +674,15 @@ already passed through the proxy (for example an upstream that resolves back to 
   `Accept` does; `Via` is added), `TestForward_ResponseFieldPolicy` (`Access-Control-*`, `Set-Cookie`,
   `Connection` and its named field are dropped; `Content-Type` and the Distribution version field pass),
   `TestForward_LoopIsRefusedBeforeAnyUpstreamCall` (508, zero upstream hits), `TestIsHopByHop`.
-- Not covered by this finding: the request policy is a denylist (F18).
+- Not covered by this finding: the request policy was a denylist (F18, resolved in 0.1.7).
 
 ### F15 — Concurrency bound, upstream deadlines and header cap
 
-**Severity:** Low (availability)   **Disposition:** RESOLVED (0.1.6, `7928960`); the values are not
-exercised by tests (F20)
-**Where:** `internal/proxy/handler.go:70-77, 116-124, 156-164`; `cmd/server/main.go:76-84`;
-`internal/proxy/forwarding_test.go`.
+**Severity:** Low (availability)   **Disposition:** RESOLVED (0.1.6, `7928960`; the values are exercised
+by tests since 0.1.7, F20)
+**Where:** `internal/proxy/handler.go` (`limits`, `defaultLimits`, `newHandler`, the in-flight semaphore
+in `ServeHTTP`); `cmd/server/main.go` (`newServer` and its constants);
+`internal/proxy/forwarding_test.go`, `limits_test.go`.
 **Issue (before 0.1.6):** the proxy accepted unlimited concurrent forwards, the upstream transport had
 no dial or response-header deadline (a stalled registry held a connection until the client gave up),
 and request headers were allowed the net/http default of 1 MiB.
@@ -637,59 +703,89 @@ and request headers were allowed the net/http default of 1 MiB.
 ### F16 — Upstream failures are logged by class, without the upstream address
 
 **Severity:** Info   **Disposition:** RESOLVED (0.1.6, `7928960`)
-**Where:** `internal/proxy/handler.go:184-189, 259-264, 363-377` (`errorKind`);
+**Where:** `internal/proxy/handler.go:221-226, 301-306, 405-419` (`errorKind`);
 `TestForward_UpstreamFailureLogsNoHostname`.
 **Issue (before 0.1.6):** the probe and forward errors were logged with the error text, which carries
 the upstream URL and so an internal hostname.
 **Remediation / evidence:** the log line carries `cause` = `timeout`, `canceled` or `unreachable`
 only, and the client sees the fixed body `upstream unavailable` with `502`. The test closes the
 upstream, then asserts the host and port appear in neither the log nor the response body and that
-`"cause":"unreachable"` is logged. The token-fetch path is not covered (F17).
+`"cause":"unreachable"` is logged. The token-fetch path is covered since 0.1.7 (F17).
 
 ### F17 — A token-service failure still logs the token endpoint URL
 
-**Severity:** Info   **Disposition:** ACCEPTED-RISK (operator-only log, no credential; the fix is one
-line, S5)
-**Where:** `internal/proxy/handler.go:226` (`slog.Error("token fetch error", …, "err", err)`) with
-`internal/token/fetcher.go:382` (`fmt.Errorf("token endpoint: %w", err)`, which wraps the `*url.Error`
-carrying the full request URL).
-**Issue:** when the fetch fails at the transport level, the logged error includes
-`http://token-service.registry.svc.cluster.local:8080/token?scope=…&service=…`. That is an internal
-hostname in the default-level log, which the PROXY lens *Error mapping* row forbids ("internal
-hostnames never appear in … logs"). It is not a secret: the Basic credential travels in a header, never
-the URL, and the response body is not logged. The client sees only `auth service error` with `502`.
-**Why accepted:** the log is an in-cluster JSON stream read by the operator, the hostname is
-the one in the public manifests of this workspace, and the repository states no log-visibility
-promise. Logging the class (`errorKind`) as F16 does would close it.
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit pending)
+**Where (0.1.6):** the handler logged `slog.Error("token fetch error", …, "err", err)`, and the error
+(`fmt.Errorf("token endpoint: %w", err)`) wrapped the `*url.Error` carrying the full request URL.
+**Where (0.1.7):** `internal/token/fetcher.go` (`FetchError`, `FailureClass`, `FailureStatus`,
+`transportError`) and the `token fetch error` log in `internal/proxy/handler.go`.
+**Issue (before 0.1.7):** when the fetch failed at the transport level, the logged error included
+`http://token-service.registry.svc.cluster.local:8080/token?scope=…&service=…`: an internal hostname in
+the default-level log, which the PROXY lens *Error mapping* row forbids. Not a secret (the Basic
+credential travels in a header), and the client saw only `auth service error` with `502`.
+**Remediation / evidence:** every fetch failure is a `*FetchError` whose text never carries the endpoint
+or an address (a transport failure reads `token endpoint unreachable|timeout|canceled`); the handler logs
+`cause` = `timeout`, `canceled`, `unreachable`, `status`, `malformed` or `request`, plus the `status`
+code when the token service answered with one. The cause stays reachable through `errors.Is` (a cancelled
+context is still `context.Canceled`). Tests: `TestForward_TokenFailureLogsClassWithoutEndpoint` (endpoint
+closed, answering 503, answering garbage: `502 auth service error`, the class in the log, and neither the
+host, the path, `service=`, the secret nor `Basic ` in the log or the body), `TestFetchErrorsCarryNoEndpoint`
+(six failure kinds, class and status, no host or URL in the text).
 
 ### F18 — Forwarding policy is a denylist: any path is forwarded, and some client fields pass through
 
-**Severity:** Low   **Disposition:** ACCEPTED-RISK (the registry authenticates every request and the
-identity is read-only; S6 narrows it)
-**Where:** `internal/proxy/handler.go:166-172, 287-316`; `internal/proxy/scope.go:58-70`.
-**Issue:** three related gaps against the PROXY lens *Route & method policy* and *Request header
-policy* rows:
+**Severity:** Low   **Disposition:** RESOLVED (0.1.7, commit pending)
+**Where (0.1.6):** `internal/proxy/handler.go` (`roundTrip`), `internal/proxy/scope.go`
+(`NormalizePath`).
+**Where (0.1.7):** `Route` and `routeRules` in `internal/proxy/scope.go`; the route check at the top of
+`ServeHTTP`; `isEdgeField` and `forwardingDropped` in `internal/proxy/handler.go`.
+**Issue (before 0.1.7):** three related gaps against the PROXY lens *Route & method policy* and
+*Request header policy* rows:
 
-1. **No route allowlist.** Any `GET`/`HEAD` path is forwarded, not only the `/v2` read routes the
-   scope predictor knows (`/v2/`, `_catalog`, `tags/list`, `manifests`, `blobs`). `NormalizePath`
-   applies its `/v2` confinement only to paths that start with `/v2`.
-2. **Path forwarded as sent.** `NormalizePath` cleans the path for scope prediction and rejects `..`,
-   but `roundTrip` forwards `r.URL.Path` unchanged: empty (`//`) and `.` segments are not rejected, and
-   an encoded slash is decoded to `/` by net/http before the proxy sees it (OQ3). A cache hit is keyed
-   by the cleaned path's scope while the registry receives the uncleaned one. The token attached is
-   still the read-only pull token for the same repository name, so this cannot reach another
-   repository's data; the worst case is a confusing `404` or a registry-side clean-path redirect
-   (which is returned, not followed). Not probed against a live registry.
-3. **Denylist for client fields.** Everything except `Authorization`, cookies, the hop-by-hop set and
-   `Connection`-named fields is copied: `X-Forwarded-*`, `Forwarded`, `X-Real-IP` and the
-   Cloudflare-added `Cf-Access-Jwt-Assertion` pass to the registry as joxit's nginx received them (an
-   Access-protected request carries that header; this was not observed in the cluster). The registry
-   does not authenticate with these, but a Distribution registry can build absolute `Location` URLs from
-   `X-Forwarded-Host`/`-Proto`, and an Access assertion is a bearer for the UI application.
-**Why accepted:** the only caller is joxit's nginx, behind Cloudflare Access; the injected token is
-read-only; the registry returns `404` for anything outside `/v2`; and none of the three reaches
-another principal's data. Allow-listing the routes and rebuilding the forwarding fields would
-remove the question (S6).
+1. **No route allowlist.** Any `GET`/`HEAD` path was forwarded, not only the `/v2` read routes the
+   scope predictor knew.
+2. **Path forwarded as sent.** `NormalizePath` cleaned the path for scope prediction but `roundTrip`
+   forwarded `r.URL.Path` unchanged, so a trailing slash and the decoded form of an encoded slash
+   (OQ3) reached the registry while the cache key came from the cleaned path.
+3. **Denylist for client fields.** `X-Forwarded-*`, `Forwarded`, `X-Real-IP` and the Cloudflare-added
+   `Cf-Access-Jwt-Assertion` passed to the registry as joxit's nginx received them; a Distribution
+   registry can build absolute `Location` URLs from `X-Forwarded-Host`/`-Proto`, and an Access
+   assertion is a bearer for the UI application.
+
+**Correction (2026-10-18):** the 0.1.6 text of point 2 also said `//` and `.` segments were forwarded as
+sent. In the wired server that was not so: `net/http`'s `ServeMux` answers `307` to the cleaned path for a
+raw path with an empty, `.` or `..` segment before the handler runs (checked and now pinned by
+`TestWiredRoutePolicy`). It was true of the `Handler` used directly, and for the decoded forms
+(`%2F..%2F`, which the mux does not see as unclean) only the `..` check applied.
+**Remediation / evidence (0.1.7):**
+
+- **Route allowlist.** Only `/v2/`, `/v2`, `/v2/_catalog` and
+  `/v2/<name>/{tags/list,manifests/<ref>,blobs/<digest>,referrers/<digest>}` are forwarded. `<name>` must
+  match the registry's repository-name grammar (lower-case components joined by `.`, `_`, `__` or
+  dashes, at most 255 characters), `<ref>` a tag or an OCI digest, `<digest>` an OCI digest. Any other
+  canonical path is `404` (answered here, as the registry would, without a token request); a path with an
+  empty, `.` or `..` segment or a trailing slash is `400 invalid path`. Both are answered before the
+  in-flight slot, the token service and the registry. What the UI needs was checked against
+  joxit/docker-registry-ui 2.6.0 (the pinned image): its nginx proxies only `location /v2`, and its
+  script calls `/v2/`, `/v2/_catalog?n=`, `/v2/<name>/tags/list` and `/v2/<name>/manifests/<ref>` (the
+  config blob is `blobs/<digest>`); `referrers` is the OCI read route the registry also serves.
+- **Path forwarded exactly as checked.** `Route` never rewrites: an accepted path is built only from the
+  name, tag and digest grammars plus `/` and `:`, so an encoded slash that decodes to a separator is a
+  legal hierarchical name, and NUL, newline, space, `%`, a second `:` or any other smuggled byte fails the
+  grammar (OQ3 decided). The scope used as the cache key is built from the validated name, so a crafted
+  path cannot mint a malformed scope.
+- **Edge fields.** `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop` and every
+  `Cf-*` field (including `Cf-Access-Jwt-Assertion`, `Cf-Connecting-Ip`) are not forwarded upstream.
+- **Why the other request fields remain a denylist.** `Accept` (manifest media types), `Range`,
+  `If-None-Match`, `User-Agent` and the like are what the UI needs and the registry defines; an
+  allowlist of them would break registry features for no gain once the credential-bearing and
+  forwarding fields are removed. This is the PROXY lens's accepted shape for a read-only pass-through.
+- Tests: `TestRoute` (allowed shapes; 400 for traversal, `//`, `.`, trailing slash, relative path; 404
+  for the root, lookalike prefixes, upload sessions, upper case, spaces, NUL, newline, scope injection,
+  names over 255), `TestPredictScope`, `TestForward_OnlyRegistryReadRoutes` (no upstream or token hit for
+  refused paths; an allowed route reaches the registry at exactly the checked path),
+  `TestForward_EdgeFieldsAreNotForwarded` (twelve edge fields dropped; `Accept`, `Range`, `User-Agent`
+  forwarded), `TestWiredRoutePolicy` (the real server and mux).
 
 ### F19 — The proxy's own door: NetworkPolicy breadth, no origin to lock, no scheduled negative check
 
@@ -719,22 +815,46 @@ external access").
 **Why mitigated, not resolved:** the exposure needs a hostile pod in an admitted namespace; the
 identity is read-only and the proxy's request surface is now bounded (F8, F14, F15). Narrowing the
 policy to the `registry-ui` pod and probing it is a platform change (PLATFORM lens).
+**Note (2026-10-18):** `SECURITY.md` now states the whole-namespace admission and that the proxy confers
+the read-only identity to any pod that reaches it. Platform item, not edited here: in
+`k8s/base/registry/networkpolicy.yaml`, narrow the `8181` ingress to the `registry-ui` pod (plus
+`platform-probe`) with a `namespaceSelector` and `podSelector` in one peer, and add the scheduled negative
+probe.
 
 ### F20 — The new deadlines and header cap are configured but not exercised by tests
 
-**Severity:** Info   **Disposition:** DEFERRED (pre-mainnet gate "limits measured and tested",
-Section D)
-**Where:** `internal/proxy/handler.go:73-74, 118-124`; `cmd/server/main.go:76-84` (`cmd/server` has 0%
-coverage).
-**Issue:** the PROXY lens *Limits* tests require "a stalled upstream ends with the stated status and
-releases any admission state" and an oversize request to be refused. `TestForward_ConcurrencyIsBounded`
-covers the in-flight bound and release, but nothing stalls an upstream past the response-header
-deadline, closes a slow dial, or sends a header block over 32 KiB; the values are constants in
-`NewHandler` and `main`, so a mistaken edit would pass the suite. `go test` passes with the values
-unexercised; a stalled-upstream test needs a configurable deadline.
-**Remediation / evidence:** make the deadlines fields of `Handler` (default the constants), add a
-stalled-upstream test asserting `502` and a released slot, and build the `http.Server` in a function
-the test can drive to assert `431` beyond 32 KiB.
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit pending; sizing and measuring the limits for
+the plan tier stays a pre-mainnet measurement, Section D)
+**Where (0.1.6):** the values were constants in `NewHandler` and `main`; `cmd/server` had 0% coverage.
+**Where (0.1.7):** `limits`/`defaultLimits`/`newHandler` in `internal/proxy/handler.go` (the constants
+become fields a test can shorten); `newServer` and its constants in `cmd/server/main.go`;
+`internal/proxy/limits_test.go`, `dial_linux_test.go`; `cmd/server/main_test.go`.
+**Issue (before 0.1.7):** the PROXY lens *Limits* tests require "a stalled upstream ends with the stated
+status and releases any admission state" and an oversize request to be refused. Only the in-flight bound
+was tested; nothing stalled an upstream past the response-header deadline, closed a slow dial, or sent a
+header block over 32 KiB, and a mistaken edit of a constant would have passed the suite.
+**Remediation / evidence (all local `httptest` servers or loopback listeners; no external network, short
+deadlines, the stalling upstreams are released at the end of each test; 0 skips, three consecutive runs
+under `-race`):**
+
+- `TestDefaultLimits` pins the production values (dial 5 s, response-header 30 s, 64 in flight; the
+  handler's transport has the 30 s deadline, no environment proxy and no total deadline).
+- `TestLimits_StalledUpstreamEndsInBadGatewayAndReleasesSlot` (probe leg and credentialed leg): an
+  upstream that accepts and never answers ends in `502` at the (shortened, 200 ms) response-header
+  deadline, the log carries `cause: timeout` and no upstream address, the in-flight slot is released (the
+  bound is 1, so the follow-up `200` proves it).
+- `TestLimits_DialDeadlineEndsInBadGateway` (Linux): a loopback listener with a full accept queue
+  stalls `connect()`; the 150 ms dial deadline ends it in `502`, `cause: timeout`. It skips, rather than
+  fails, on a host that completes connections to a full queue; it did not skip here.
+- `TestLimits_SlowBodyStreamsPastTheHeaderDeadline`: a body that outlasts the response-header deadline
+  streams in full (no total deadline).
+- `TestLimits_InFlightBoundFollowsTheLimit`: the third request against a bound of 2 is `503` with
+  `Retry-After`; the bound comes back after the held forwards finish.
+- `TestServerLimits` (32 KiB header cap, 10 s header read, 120 s idle, no read or write timeout) and
+  `TestServerRefusesOversizeHeaders` (a 40 KiB header is `431` and never reaches the handler; 16 KiB is
+  served), `TestHealth`, `TestSecretRotationWithoutRestart`, `TestWiredRoutePolicy`: `cmd/server` coverage
+  0% to 38.6% (`main` itself, which needs a signal, is the rest).
+- **Remainder (maintainer, pre-mainnet):** limits sized for the plan tier and measured under load.
 
 ### F21 — The `registry-browser` Hydra client is registered with a `registry:push` scope
 
@@ -750,21 +870,33 @@ own comment says so. The restriction comes from Keto (`pullers` on `meddleware-o
 service (granted = requested ∩ Keto), and, since 0.1.4, from the proxy, which never asks for a push
 scope (F8). The client scope is not what the token service enforces.
 **Why mitigated, not resolved:** the fix (drop `registry:push` from the client registration, re-run
-the setup Job) is a one-line platform change outside this repository. A mis-edit of the Keto tuples
+the setup Job) is a one-line platform change outside this repository (2026-10-18: not edited here; the
+Hydra client registration and its Job are platform manifests — OQ7). A mis-edit of the Keto tuples
 alone no longer widens the browser.
 
 ### F22 — No licence or notice text for the compiled-in stdlib and the CA bundle ships in the image
 
-**Severity:** Info   **Disposition:** DEFERRED (pre-mainnet documentation gate, Section D; the same
-finding as registry-token-service F18)
-**Where:** `Dockerfile:33-55` (`scratch` plus `/auth-proxy` and `/etc/ssl/certs/ca-certificates.crt`).
-**Issue:** the IMG lens *SBOM & notices* row asks that code redistributed in the image ships its
-licence texts. The binary contains the Go standard library (BSD-3-Clause) and the image carries the
-Mozilla CA bundle copied from the builder (MPL-2.0); the project's own licence is 0BSD (label and
-`LICENSE`), and no notice for either is in the image. The SBOM does list the stdlib version and the
-base. Low impact: the obligation is attribution, and `scratch` has nowhere to put it today.
-**Remediation / evidence:** copy the Go `LICENSE` and the CA bundle's licence note from the builder
-into the runtime stage (for example `/THIRD_PARTY_LICENSES`), as the web images now do.
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit pending; the same finding as
+registry-token-service F18, fixed the same way)
+**Where (0.1.6):** `Dockerfile` (`scratch` plus `/auth-proxy` and `/etc/ssl/certs/ca-certificates.crt`).
+**Where (0.1.7):** `Dockerfile` (notices stage and `COPY`), `scripts/third-party-licenses.sh`,
+`scripts/check-image-notices.sh`, `.github/workflows/go-ci.yml` (job `image`), `.dockerignore`.
+**Issue (before 0.1.7):** the IMG lens *SBOM & notices* row asks that code redistributed in the image
+ships its licence texts. The binary contains the Go standard library (BSD-3-Clause) and the image
+carries the Mozilla CA bundle copied from the builder (MPL-2.0); the project's own licence is 0BSD (label
+and `LICENSE`), and no notice for any of them was in the image. `.dockerignore` even excluded `LICENSE`.
+**Remediation / evidence:** the builder stage runs `scripts/third-party-licenses.sh`, which writes
+`THIRD_PARTY_LICENSES` (the Go standard library licence of the building toolchain, the Debian
+`ca-certificates` copyright file, which carries the MPL-2.0 text for the Mozilla bundle, and the licence of
+any third-party module in the build graph, none today) and fails the build if a module has no licence
+file, the Go licence or the MPL text is missing, or the file is implausibly short. The runtime stage
+copies it and the repository `LICENSE` to `/usr/share/doc/registry-auth-proxy/`. `.dockerignore` no
+longer excludes `LICENSE` and now matches `.git` as a file or directory and excludes `docs/`. The new CI
+job `image` runs `scripts/check-image-notices.sh` (builds the image, copies the files out of a created
+container, and checks that both files are non-empty, that the standard library, the CA bundle, BSD and
+MPL-2.0 text are present, every module in the graph is named, and the image `LICENSE` equals the
+repository's); the release workflow's `verify` job runs the same `go-ci.yml`, so the gate covers a tag.
+Checked locally with rootless podman: `image notices OK`.
 
 ---
 
@@ -772,55 +904,58 @@ into the runtime stage (for example `/THIRD_PARTY_LICENSES`), as the web images 
 
 | # | Invariant | Enforced at | Proven by | Status |
 | --- | --- | --- | --- | --- |
-| I1 | Inbound `Authorization` stripped, replaced (never appended) by the proxy's own token | `handler.go:301, 310` | `TestForward_RequestFieldPolicy`, `TestServeHTTP_HappyPath` | HOLDS |
-| I2 | Fail closed on a token-fetch error → 502, never a naked 401 | `handler.go:222-229` | `TestServeHTTP_TokenFailureIsBadGateway` | HOLDS |
-| I3 | 401→403 remap after a token is attached | `handler.go:267-277` | `TestServeHTTP_RemapUnauthorized`, `TestServeHTTP_RefusedTokenIsDropped` | HOLDS |
-| I4 | Only pull/catalog scopes predicted **and requested** (read-only) | `scope.go:16-46`; `challenge.go:455-473`; `handler.go:211-218` | `TestPredictScope`, `TestReadOnlyScope`, `TestServeHTTP_RefusesNonReadChallenge` | HOLDS (F8) |
-| I5 | Hop-by-hop and `Connection`-named fields stripped both directions | `handler.go:54-63, 299-307, 321-347` | `TestIsHopByHop`, `TestForward_RequestFieldPolicy`, `TestForward_ResponseFieldPolicy` | HOLDS (F14) |
-| I6 | No body tampering; responses streamed | `handler.go:331-332` | happy path | HOLDS |
-| I7 | Only `GET`/`HEAD` forwarded; no request body read or forwarded | `handler.go:142-146, 292` | `TestServeHTTP_OnlyGetAndHead`, `TestServeHTTP_HeadIsForwarded` | HOLDS (F8; the 32 MiB cap was removed with the buffer) |
-| I8 | Client secret file-only, never env, never logged | `config.go:481-504`; `fetcher.go` | config tests; grep of every `slog` call | HOLDS |
+| I1 | Inbound `Authorization` stripped, replaced (never appended) by the proxy's own token | `handler.go:343, 352` | `TestForward_RequestFieldPolicy`, `TestServeHTTP_HappyPath` | HOLDS |
+| I2 | Fail closed on a token-fetch error → 502, never a naked 401 | `handler.go:259-271` | `TestServeHTTP_TokenFailureIsBadGateway` | HOLDS |
+| I3 | 401→403 remap after a token is attached | `handler.go:309-319` | `TestServeHTTP_RemapUnauthorized`, `TestServeHTTP_RefusedTokenIsDropped` | HOLDS |
+| I4 | Only pull/catalog scopes predicted **and requested** (read-only) | `scope.go:8-36`; `challenge.go:455-473`; `handler.go:248-255` | `TestPredictScope`, `TestReadOnlyScope`, `TestServeHTTP_RefusesNonReadChallenge` | HOLDS (F8) |
+| I5 | Hop-by-hop and `Connection`-named fields stripped both directions | `handler.go:55-64, 341-349, 363-389` | `TestIsHopByHop`, `TestForward_RequestFieldPolicy`, `TestForward_ResponseFieldPolicy` | HOLDS (F14) |
+| I6 | No body tampering; responses streamed | `handler.go:373-374` | happy path | HOLDS |
+| I7 | Only `GET`/`HEAD` forwarded; no request body read or forwarded | `handler.go:176-180, 334` | `TestServeHTTP_OnlyGetAndHead`, `TestServeHTTP_HeadIsForwarded` | HOLDS (F8; the 32 MiB cap was removed with the buffer) |
+| I8 | Client secret file-only (read at startup and again after a token-service `401`), never env, never logged | `config.go` (`ReadSecret`); `fetcher.go` (`refreshSecret`) | config tests; `TestFetchRereadsRotatedSecret`, `TestFetchRotationFailsClosed` (no secret value or path in the log); grep of every `slog` call | HOLDS (F10) |
 | I9 | Non-root scratch UID 65534 | `Dockerfile:33, 57`; pod `securityContext` | Dockerfile; manifest | HOLDS |
-| I10 | Path normalization / traversal defence | `scope.go` `NormalizePath`; handler 400 | `TestNormalizePath`, `TestPredictScope` | HOLDS for `..` (F2); empty/`.` segments and non-`/v2` paths pass (F18) |
+| I10 | Only canonical registry read routes are forwarded; the path is never rewritten (traversal, empty and `.` segments, trailing slash → `400`; any other route → `404`) | `scope.go` (`Route`, `routeRules`); `ServeHTTP` | `TestRoute`, `TestPredictScope`, `TestForward_OnlyRegistryReadRoutes`, `TestWiredRoutePolicy` | HOLDS (F2, F18) |
 | I11 | Upstream URL validated at config time | `config.go` `validateHTTPURL` | `config_test.go` | HOLDS (F1) |
 | I12 | Cache bounded (512); expired entries evicted | `cache.go:177, 236-270` | `TestCacheIsBounded`, `TestCacheEvictionKeepsEmptyScope` | HOLDS (F3) |
 | I13 | Refresh margin subtracted before store; spec expiry | `cache.go:236-249`; `fetcher.go:403-416` | `TestCacheMarginExpiry`, `TestCacheSkipsTokenAlreadyInsideMargin`, `TestFetchExpiry` | HOLDS |
-| I14 | Upstream redirects not followed | `handler.go:129-131` | `TestServeHTTP_DoesNotFollowUpstreamRedirect` | HOLDS (F4; probe leg tested, credentialed leg shares the client) |
-| I15 | Cache key = the scope the token was issued for (AUTH lens) | `handler.go:239-252` | `TestServeHTTP_TokenCachedOnlyUnderIssuedScope` | HOLDS (F7) |
+| I14 | Upstream redirects not followed | `handler.go:163-165` | `TestServeHTTP_DoesNotFollowUpstreamRedirect` | HOLDS (F4; probe leg tested, credentialed leg shares the client) |
+| I15 | Cache key = the scope the token was issued for (AUTH lens) | `handler.go:281-294` | `TestServeHTTP_TokenCachedOnlyUnderIssuedScope` | HOLDS (F7) |
 | I16 | Proxy requests only pull/catalog scopes and forwards only read methods (SECURITY.md 4; CLAUDE.md) | I4 + I7 | the tests of I4 and I7 | HOLDS (F8) |
-| I17 | Cookies are not sent upstream; `Set-Cookie` and `Access-Control-*` are not passed to the UI | `handler.go:82-86, 301, 324` | `TestForward_RequestFieldPolicy`, `TestForward_ResponseFieldPolicy` | HOLDS (F14) |
-| I18 | A request that already passed through the proxy is refused (`508`) before any upstream call | `handler.go:148-154` | `TestForward_LoopIsRefusedBeforeAnyUpstreamCall` | HOLDS (F14) |
-| I19 | At most 64 forwards in flight; `503` with `Retry-After` beyond | `handler.go:156-164` | `TestForward_ConcurrencyIsBounded` | HOLDS (F15) |
-| I20 | Upstream dial 5 s and response-header 30 s deadlines; request headers ≤ 32 KiB | `handler.go:118-124`; `main.go:79-83` | none | HOLDS in code only — F20 |
-| I21 | An upstream failure is logged by class, without the upstream address | `handler.go:186, 261, 363-377` | `TestForward_UpstreamFailureLogsNoHostname` | HOLDS for forwards (F16); the token-fetch log carries the URL (F17) |
-| I22 | Concurrent misses for one scope share one token request; a refused token is evicted | `flight.go`; `handler.go:239-252, 275` | `TestFlight*`, `TestServeHTTP_ConcurrentMissesShareOneTokenRequest`, `TestServeHTTP_RefusedTokenIsDropped` | HOLDS (F3, F7) |
+| I17 | Cookies are not sent upstream; `Set-Cookie` and `Access-Control-*` are not passed to the UI | `handler.go:99-103, 343, 366` | `TestForward_RequestFieldPolicy`, `TestForward_ResponseFieldPolicy` | HOLDS (F14) |
+| I18 | A request that already passed through the proxy is refused (`508`) before any upstream call | `handler.go:182-188` | `TestForward_LoopIsRefusedBeforeAnyUpstreamCall` | HOLDS (F14) |
+| I19 | At most 64 forwards in flight; `503` with `Retry-After` beyond | `handler.go:203-211` | `TestForward_ConcurrencyIsBounded` | HOLDS (F15) |
+| I20 | Upstream dial 5 s and response-header 30 s deadlines, no total deadline; request headers ≤ 32 KiB | `handler.go` (`limits`, `newHandler`); `main.go` (`newServer`) | `TestDefaultLimits`, `TestLimits_StalledUpstreamEndsInBadGatewayAndReleasesSlot`, `TestLimits_DialDeadlineEndsInBadGateway`, `TestLimits_SlowBodyStreamsPastTheHeaderDeadline`, `TestServerLimits`, `TestServerRefusesOversizeHeaders` | HOLDS (F20) |
+| I21 | An upstream or token-service failure is logged by class, without the address or URL | `handler.go:223, 303, 405-419` (`errorKind`); the `token fetch error` log with `token.FailureClass`; `fetcher.go` (`FetchError`) | `TestForward_UpstreamFailureLogsNoHostname`, `TestForward_TokenFailureLogsClassWithoutEndpoint`, `TestFetchErrorsCarryNoEndpoint` | HOLDS (F16, F17) |
+| I22 | Concurrent misses for one scope share one token request; a refused token is evicted | `flight.go`; `handler.go:281-294, 317` | `TestFlight*`, `TestServeHTTP_ConcurrentMissesShareOneTokenRequest`, `TestServeHTTP_RefusedTokenIsDropped` | HOLDS (F3, F7) |
+| I23 | `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop` and `Cf-*` (incl. the Access assertion) are not forwarded upstream | `handler.go` (`isEdgeField`, `forwardingDropped`, `roundTrip`) | `TestForward_EdgeFieldsAreNotForwarded` | HOLDS (F18) |
+| I24 | A rotated client secret takes effect without a restart: one re-read and one retry after a token-service `401`; an unchanged or unreadable file fails closed | `fetcher.go` (`Fetch`, `refreshSecret`); `main.go` (`newMux`) | `TestFetchRereadsRotatedSecret`, `TestFetchRotationFailsClosed`, `TestFetchOtherFailuresDoNotReload`, `TestFetchConcurrentRotation`, `TestSecretRotationWithoutRestart` | HOLDS (F10) |
+| I25 | A redirect from the registry is returned, never followed, on the credentialed leg too | `handler.go` (`CheckRedirect`) | `TestForward_NoCredentialReachesAForeignRedirectTarget` | HOLDS (F4) |
 
 ### Lens category coverage
 
 | Lens | Category | Status |
 | --- | --- | --- |
-| GO | HTTP server hygiene | HOLDS (code-only) — `ReadHeaderTimeout` 10 s, `IdleTimeout` 120 s, `MaxHeaderBytes` 32 KiB, no `WriteTimeout` (blobs stream, intentional); methods allow-listed (`405` with `Allow: GET, HEAD`); no body is read; a handler panic is recovered per connection by net/http |
-| GO | Outbound calls | HOLDS — token fetcher `Timeout` 10 s and 64 KiB body cap; upstream client dial 5 s and response-header 30 s with streamed bodies; no `InsecureSkipVerify`/`TLSClientConfig` anywhere; redirects: PROXY row |
-| GO | Input & path handling | HOLDS for `..` and the `/v2` confinement; the rest is F18 |
+| GO | HTTP server hygiene | HOLDS — `ReadHeaderTimeout` 10 s, `IdleTimeout` 120 s, `MaxHeaderBytes` 32 KiB (`431` beyond, tested), no `WriteTimeout` (blobs stream, intentional); methods allow-listed (`405` with `Allow: GET, HEAD`); no body is read; a handler panic is recovered per connection by net/http |
+| GO | Outbound calls | HOLDS — token fetcher `Timeout` 10 s and 64 KiB body cap; upstream client dial 5 s and response-header 30 s with streamed bodies (all three tested, F20); no `InsecureSkipVerify`/`TLSClientConfig` anywhere; redirects: PROXY row |
+| GO | Input & path handling | HOLDS — route allowlist with the registry's name, tag and digest grammars; the path is never rewritten (F18) |
 | GO | AuthN / AuthZ | N/A inbound (by design); no secret comparison exists; token rules: AUTH rows |
 | GO | Secrets | HOLDS — I8 |
 | GO | Client identity | N/A — the proxy keys nothing on an address; the per-visitor limit is nginx's (20 r/s, F3) |
 | GO | Concurrency | HOLDS — `go test -race` green; the cache and `Flight` are mutex-guarded; no goroutine is started per request |
-| GO | Graceful shutdown | HOLDS (code-only) — SIGTERM and SIGINT call `Server.Shutdown` with 10 s (`main.go:94-103`) |
+| GO | Graceful shutdown | HOLDS (code-only; `main` needs a signal) — SIGTERM and SIGINT call `Server.Shutdown` with 10 s (`main.go:78-87`) |
 | GO | Health & version | HOLDS — `/healthz` returns `{"status":"ok"}`; no `/version` |
-| GO | Error handling | HOLDS — fixed text bodies (`upstream unavailable`, `auth service error`, `scope not permitted`, `busy`, `loop detected`, `invalid path`); F17 for the token-fetch log |
+| GO | Error handling | HOLDS — fixed text bodies (`upstream unavailable`, `auth service error`, `scope not permitted`, `busy`, `loop detected`, `invalid path`, `not found`); the token-fetch log carries a class, not the URL (F17) |
 | GO | CI (B.GO-1) | HOLDS — `go vet`, golangci-lint v2.13.0, race tests, govulncheck v1.8.0 (pinned), Trivy filesystem scan; no `go.sum` (stdlib only); `-trimpath`, `CGO_ENABLED=0`, version injected with `-X main.version` |
 | IMG | Base images | HOLDS — builder digest-pinned and checked against the `go.mod` toolchain; runtime `scratch` |
-| IMG | Build context | HOLDS — `.dockerignore` excludes `.git/`, `.env*`, `client-secret`, `*.key`, `*.pem` |
+| IMG | Build context | HOLDS — `.dockerignore` excludes `.git`, `docs/`, `.env*`, `client-secret`, `*.key`, `*.pem` |
 | IMG | Reproducible build stage | HOLDS — `go.mod` only, no dependency to resolve; only the binary and the CA bundle reach the runtime stage |
 | IMG | No secrets in layers | HOLDS — build args are OCI label strings |
 | IMG | Runtime user & filesystem | HOLDS — `USER 65534:65534`; pod: `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, all capabilities dropped, `RuntimeDefault` seccomp, `automountServiceAccountToken: false` |
 | IMG | Runtime configuration | HOLDS — the image sets only `PORT`; the manifest sets `UPSTREAM_URL`, `TOKEN_ENDPOINT`, `CLIENT_ID`, `CLIENT_SECRET_FILE`, `TOKEN_REFRESH_MARGIN`, `LOG_LEVEL` |
 | IMG | Health & resources | HOLDS — readiness and liveness on `/healthz`; requests 20m/32Mi, limits 200m/128Mi |
-| IMG | SBOM & notices | SBOM HOLDS (SPDX attestation generated from the pushed image); licence notices GAP — F22 |
+| IMG | SBOM & notices | HOLDS — SPDX attestation generated from the pushed image; licence notices (Go standard library, CA bundle copyright, `LICENSE`) in `/usr/share/doc/registry-auth-proxy/`, checked in CI (F22, 0.1.7) |
 | IMG | Scan before sign | HOLDS — Trivy on the pushed digest before `cosign sign` (F9) |
-| IMG | Verification command | PARTIAL — the job summary prints a workflow-pinned regexp; the README example accepts any workflow in the repository (F12) |
-| IMG | Deployment pinning | HOLDS — digest from `config/images.yaml` stamped into the `registry` overlay and cosign-verified 2026-10-09; the base manifest's stale tag `0.1.1` is overridden (F12) |
+| IMG | Verification command | HOLDS — the README example and the job summary print the same workflow-pinned regexp (F12, 0.1.7) |
+| IMG | Deployment pinning | HOLDS — digest from `config/images.yaml` stamped into the `registry` overlay and cosign-verified 2026-10-09; the base manifest's stale tag `0.1.1` is overridden (F12, a platform item) |
 | AUTH | Issuer keys & signing | N/A — the proxy issues nothing |
 | AUTH | Token claims & lifetime | N/A (issued by the token service); the proxy honours `expires_in`/`issued_at` conservatively (I13) |
 | AUTH | Token verification | N/A — the registry verifies; the proxy treats the token as opaque |
@@ -838,12 +973,12 @@ into the runtime stage (for example `/THIRD_PARTY_LICENSES`), as the web images 
 | AUTH | Transport to identity services | MITIGATED — plain in-cluster HTTP on one node, NetworkPolicy, no mutual authentication (F5) |
 | AUTH | Signed-challenge protocols | N/A |
 | AUTH | Audit trail | HOLDS by delegation — the token service logs each issuance with requested and granted scope; the proxy logs a refused challenge scope (warn) and a remapped `401` (info), never a credential; per-request access lines are debug-level only |
-| PROXY | Route & method policy | PARTIAL — `GET`/`HEAD` only, `..` and `/v2` escape rejected, upstream URL from configuration; no route allowlist, empty/`.` segments forwarded as sent (F18) |
-| PROXY | Request header policy | HOLDS with a denylist — `Authorization`, cookies, hop-by-hop and `Connection`-named fields removed, `Host` set, `Via` added (F14); forwarding fields and the Access assertion are copied (F18) |
+| PROXY | Route & method policy | HOLDS — `GET`/`HEAD` only, an allowlist of the registry read routes, canonical paths only and never rewritten, upstream URL from configuration (F18) |
+| PROXY | Request header policy | HOLDS — `Authorization`, cookies, hop-by-hop and `Connection`-named fields, `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop` and `Cf-*` removed, `Host` set, `Via` added (F14, F18); the remaining fields are the ones the registry API defines (F18) |
 | PROXY | Response header policy | HOLDS — hop-by-hop, `Connection`-named, `Set-Cookie` and `Access-Control-*` dropped (F14) |
 | PROXY | Redirects | HOLDS — `ErrUseLastResponse` on the one client (F4) |
-| PROXY | Limits & timing | HOLDS in code (F15), untested (F20) — 10 s header read, 120 s idle, 32 KiB headers, no body, 64 in flight, upstream dial 5 s and response-header 30 s; no total deadline by design; no cap on idle connections |
-| PROXY | Error mapping | HOLDS for forwards (F16): fixed `502`/`503`/`508` bodies, class-only logs; F17 for the token log |
+| PROXY | Limits & timing | HOLDS (F15, tested in F20) — 10 s header read, 120 s idle, 32 KiB headers, no body, 64 in flight, upstream dial 5 s and response-header 30 s; no total deadline by design; no cap on idle connections |
+| PROXY | Error mapping | HOLDS (F16, F17): fixed `502`/`503`/`508`/`404`/`400` bodies, class-only logs for forwards and for the token fetch |
 | PROXY | Admission state | N/A — no claim/forward/commit sequence; the token cache is a cache, not a ledger (single replica, in-process) |
 | PROXY | Origin lock | N/A for the upstream (the registry is its own gate); the proxy's own door is F19 |
 | PROXY | Loop & self-reference | HOLDS — `Via` check, `508` (F14) |
@@ -869,7 +1004,7 @@ into the runtime stage (for example `/THIRD_PARTY_LICENSES`), as the web images 
 | Authority / secret | Where held | Custody | Gates | Rotation |
 | --- | --- | --- | --- | --- |
 | Image publish | CI `docker-publish.yml` | registry tokens in GitHub secrets; keyless cosign + signed SPDX SBOM + SLSA `mode=max` + GitHub build-provenance attestation | `verify` = the full `go-ci.yml` (lint, race tests, govulncheck, Trivy), then Trivy on the pushed image before signing (F9) | quay/Docker Hub token scope, holder and rotation date: maintainer item, `OPERATOR_TASKS.md` "Image registry credentials" (before mainnet); the self-hosted mirror job is best-effort (`continue-on-error`, unsigned, fails without credentials) |
-| `CLIENT_SECRET_FILE` | mounted k8s Secret `registry-auth-proxy-secret` (0440; SOPS at rest) | read once at startup; unexported; never env or logs | Basic auth to the token service | `docs/auth/OPERATIONS.md` plus a pod restart; no cadence or compromise procedure (F10) |
+| `CLIENT_SECRET_FILE` | mounted k8s Secret `registry-auth-proxy-secret` (0440; SOPS at rest) | read at startup and again after a token-service `401`; unexported; never env or logs | Basic auth to the token service | `SECURITY.md` procedure (both Secrets, then the `hydra-client-setup` Job; the proxy re-reads, restart as fallback); no cadence or rehearsal record (F10) |
 
 CI and release integrity (base §B.2): actions pinned by full SHA; explicit `permissions:` (`contents:
 read`; `id-token` and `attestations` only on `publish-public`); tag-gated release (`v*`); release gate
@@ -882,7 +1017,8 @@ Each pushed image (quay.io and Docker Hub, multi-arch, signed at the index diges
 cosign signature, an SPDX SBOM attached as a signed attestation (`cosign attest --type spdxjson`) and a
 GitHub build-provenance attestation, plus BuildKit `provenance: mode=max` (`sbom: false` because the
 BuildKit scanner pull is unreliable); none of these steps uses `continue-on-error`. The self-hosted
-registry push (`publish-private`) is a best-effort, unsigned mirror. The 0.1.6 digest
+registry push (`publish-private`) is a best-effort, unsigned mirror. From 0.1.7 the image also carries
+its licence notices (F22) and the `verify` job includes the `image` check. The 0.1.6 digest
 `sha256:d98c347c…1581` is the same on quay.io, Docker Hub and in `config/images.yaml`, and was
 cosign-verified on 2026-10-09.
 
@@ -890,7 +1026,7 @@ cosign-verified on 2026-10-09.
 
 | Key / credential | Type / algorithm | Where held | Who can read it | Rotation cadence · last rotated | Compromise procedure |
 | --- | --- | --- | --- | --- | --- |
-| `registry-browser` client secret | OAuth 2 client secret (client credentials; HTTP Basic to the token service) | k8s Secret `registry-auth-proxy-secret` mounted at `CLIENT_SECRET_FILE`; the same value in `hydra-client-secrets` (`browser-client-secret`); SOPS-encrypted sources in the cluster directory | the pod; cluster admins; the age-key holder | no cadence fixed · set at bootstrap, no rotation date recorded | rotate through the `hydra-client-setup` Job and restart the pod (`docs/auth/OPERATIONS.md`); no dedicated compromise procedure (F10) |
+| `registry-browser` client secret | OAuth 2 client secret (client credentials; HTTP Basic to the token service) | k8s Secret `registry-auth-proxy-secret` mounted at `CLIENT_SECRET_FILE`; the same value in `hydra-client-secrets` (`browser-client-secret`); SOPS-encrypted sources in the cluster directory | the pod; cluster admins; the age-key holder | no cadence fixed · set at bootstrap, no rotation date recorded (maintainer, F10) | `SECURITY.md` "Client-secret rotation and compromise" (the compromise steps are the rotation steps with the new value at once, then a log review); `docs/auth/OPERATIONS.md` for the Hydra side (F10) |
 | Cached registry Bearer tokens | Distribution JWT (opaque to the proxy) | process memory | the process | TTL from the token service; margin 30 s; max 512 entries | expire; a refused token is evicted; restart clears |
 | quay.io / Docker Hub push tokens | registry robot/access tokens | GitHub repository secrets | maintainers | not recorded — maintainer item, `OPERATOR_TASKS.md` "Image registry credentials" (before mainnet) | revoke at the registry |
 
@@ -898,7 +1034,7 @@ cosign-verified on 2026-10-09.
 
 | OAuth client / relation | Type, grant types, auth method | Redirect URIs | Scopes / relations granted | Owner | Last reviewed |
 | --- | --- | --- | --- | --- | --- |
-| `registry-browser` | confidential; `client_credentials`; `client_secret_basic` (through registry-token-service) | n/a | Hydra registration: `registry:push registry:pull registry:catalog` (broader than use, F21); Keto: `pullers` on `meddleware-org`, `listers` on `catalog`; the proxy requests only pull and catalog (F8) | platform (`hydra-client-setup`, `keto-relations-setup` Jobs) | 2026-10-09 (this audit; tuples read-only) |
+| `registry-browser` | confidential; `client_credentials`; `client_secret_basic` (through registry-token-service) | n/a | Hydra registration: `registry:push registry:pull registry:catalog` (broader than use, F21, platform); Keto: `pullers` on `meddleware-org`, `listers` on `catalog`; the proxy requests only pull and catalog (F8) | platform (`hydra-client-setup`, `keto-relations-setup` Jobs) | 2026-10-09 (this audit; tuples read-only) |
 | Keto `Registry` / `meddleware-org` / `pullers` | relation | n/a | `registry-browser` (and `registry-ci-push`, `registry-node-pull`) | platform; written only by the setup Job inside `auth` | see the registry-token-service audit |
 | Keto `Registry` / `catalog` / `listers` | relation | n/a | `registry-browser` | platform | see the registry-token-service audit |
 
@@ -913,44 +1049,47 @@ cosign-verified on 2026-10-09.
 | Route / path | Methods | Auth | Forwarded request fields | Stripped (both ways) | Response fields kept | Cache |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/healthz` | any (local handler) | none | n/a | n/a | fixed JSON body | none |
-| `/v2/_catalog`, `/v2/<name>/tags/list`, `/v2/<name>/manifests/<ref>`, `/v2/<name>/blobs/<digest>`, `/v2/` | `GET`, `HEAD` (others `405`) | none inbound; the proxy's Bearer outbound | every field except those stripped, plus `Via` and the proxy's `Authorization`; `Host` = the upstream's; query forwarded verbatim | request: `Authorization`, `Cookie`/`Cookie2`, `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade` and every field named in `Connection`; response: the same hop-by-hop set, `Connection`-named fields, `Set-Cookie`/`Set-Cookie2`, `Access-Control-*` | everything else (Distribution headers, `Content-Type`, `Docker-Content-Digest`, `Location`); `401` after a token → `403` | tokens only, in process, keyed by issued scope; no response caching |
-| any other path (F18) | `GET`, `HEAD` | as above | as above | as above | as above | none |
+| `/v2/_catalog`, `/v2/<name>/tags/list`, `/v2/<name>/manifests/<ref>`, `/v2/<name>/blobs/<digest>`, `/v2/<name>/referrers/<digest>`, `/v2/` and `/v2` (names, tags and digests in the registry's grammars) | `GET`, `HEAD` (others `405`) | none inbound; the proxy's Bearer outbound | every field except those stripped, plus `Via` and the proxy's `Authorization`; `Host` = the upstream's; query forwarded verbatim; the path exactly as checked | request: `Authorization`, `Cookie`/`Cookie2`, `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, every field named in `Connection`, and `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop`, `Cf-*`; response: the same hop-by-hop set, `Connection`-named fields, `Set-Cookie`/`Set-Cookie2`, `Access-Control-*` | everything else (Distribution headers, `Content-Type`, `Docker-Content-Digest`, `Location`); `401` after a token → `403` | tokens only, in process, keyed by issued scope; no response caching |
+| any other canonical path (F18) | any | none | not forwarded: `404` here, before the token service or the registry | n/a | n/a | none |
+| a path with an empty, `.` or `..` segment or a trailing slash (F18) | any | none | not forwarded: `400 invalid path` (the mux answers `307` to the cleaned path for the raw forms first) | n/a | n/a | none |
 
 ### B.PX-2 Limits
 
 | Limit | Value | Where enforced | Test |
 | --- | --- | --- | --- |
-| header-read timeout · body-read deadline · idle timeout | 10 s · n/a (no body is read) · 120 s | `main.go:79-80` | none (F20) |
-| request body cap (declared / streamed) | none needed: no body is read or forwarded | `handler.go:292` (nil body) | `TestServeHTTP_OnlyGetAndHead` |
-| request header size | 32 KiB (`431` beyond) | `main.go:83` | none (F20) |
-| concurrent connections / in-flight forwards | 64 forwards (`503` + `Retry-After: 1`); connections not capped | `handler.go:76, 156-164` | `TestForward_ConcurrencyIsBounded` |
-| upstream connect · response · total deadline | 5 s · 30 s (headers) · none (blobs stream) | `handler.go:73-74, 118-124` | none (F20) |
-| token fetch | 10 s, 64 KiB | `fetcher.go:361, 386` | `TestFetchFailsClosed` |
+| header-read timeout · body-read deadline · idle timeout | 10 s · n/a (no body is read) · 120 s | `main.go` (`newServer`) | `TestServerLimits` (the values; a slow-header test would need the full 10 s) |
+| request body cap (declared / streamed) | none needed: no body is read or forwarded | `handler.go:334` (nil body) | `TestServeHTTP_OnlyGetAndHead` |
+| request header size | 32 KiB (`431` beyond) | `main.go` (`newServer`) | `TestServerRefusesOversizeHeaders` |
+| concurrent connections / in-flight forwards | 64 forwards (`503` + `Retry-After: 1`); connections not capped | `handler.go` (`DefaultMaxInFlight`, the semaphore in `ServeHTTP`) | `TestForward_ConcurrencyIsBounded`, `TestLimits_InFlightBoundFollowsTheLimit`, `TestDefaultLimits` |
+| upstream connect · response · total deadline | 5 s · 30 s (headers) · none (blobs stream) | `handler.go` (`limits`, `newHandler`) | `TestDefaultLimits`, `TestLimits_DialDeadlineEndsInBadGateway`, `TestLimits_StalledUpstreamEndsInBadGatewayAndReleasesSlot`, `TestLimits_SlowBodyStreamsPastTheHeaderDeadline` |
+| token fetch | 10 s, 64 KiB; at most one retry, after a `401` and a changed secret file | `fetcher.go` (`NewFetcher`, `Fetch`, `attempt`) | `TestFetchFailsClosed`, `TestFetchRotationFailsClosed` |
 | token cache | 512 entries; margin 30 s | `cache.go:177` | `TestCacheIsBounded` |
-| admission-state lifetime | n/a (no admission state) | — | — |
+| admission-state lifetime | in-flight slot: held for the forward, released on return, also after a timeout | `handler.go` (`defer` in `ServeHTTP`) | `TestLimits_StalledUpstreamEndsInBadGatewayAndReleasesSlot` |
 
 ---
 
 ## Section C — Test-coverage & hermetic/live split
 
-### C.1 Coverage grade — A− (proxy 93.8%, token 94.1%, config 86.8%; race-clean; 37 test functions, 79 runs)
+### C.1 Coverage grade — A (proxy 96.9%, token 95.5%, config 86.7%, cmd/server 38.6%; race-clean; 59 test functions, 142 runs; measured 2026-10-18 on the 0.1.7 tree)
 
 | Dimension | Assessment |
 | --- | --- |
 | Happy path | A — scope prediction, challenge parse (quoted, escaped, lowercase scheme), hop-by-hop, remap, cache hit and margin, fetcher success, `HEAD` |
-| Error path | A− — fail-closed 502, fetcher non-200/empty/oversize, refused challenge scopes, refused token eviction, redirect, 405s, 508, 503 on the bound, class-only failure log |
-| Boundary / edge | B+ — traversal and normalisation, cache bound and eviction, single flight, `Connection`-named fields; **missing:** a stalled upstream and the dial deadline, a header block over 32 KiB (F20), empty/`.` segments and non-`/v2` paths (F18), a recording upstream asserting no credential reaches a foreign `Location` on the credentialed leg (F4) |
-| Security-relevant | A− — secret loading, inbound strip (replaced not appended), cookies, CORS, scope-exact cache, read-only enforcement; `cmd/server` (0%) holds the server settings and graceful shutdown, which are untested |
+| Error path | A — fail-closed 502, fetcher non-200/empty/oversize/transport failures with their classes, refused challenge scopes, refused token eviction, redirect (both legs), 405s, 404/400 for refused routes, 508, 503 on the bound, stalled upstream and dial timeouts, class-only failure logs for forwards and token fetches |
+| Boundary / edge | A− — route grammar (names to 255 characters, tags, digests, smuggled bytes), traversal and non-canonical paths, cache bound and eviction, single flight, `Connection`-named fields, stalled upstream, dial deadline, slow body, header block over 32 KiB, a recording upstream asserting no credential reaches a foreign `Location` on the credentialed leg; **missing:** a slow-header (`ReadHeaderTimeout`) test, which needs the full 10 s |
+| Security-relevant | A — secret loading and rotation (unit, concurrent and end to end), inbound strip (replaced not appended), cookies, edge fields, CORS, scope-exact cache, read-only enforcement, server settings; graceful shutdown (in `main`, needs a signal) is untested |
 
 ### C.2 Hermetic vs. live paths
 
 | Path | Hermetic unit test? | Deferred to | Tracking |
 | --- | --- | --- | --- |
 | Scope prediction, hop-by-hop, remap, cache, flight | yes | — | proxy and token tests |
-| Request/response field policy, loop, in-flight bound, failure log | yes (`forwarding_test.go`) | — | F14–F16 |
+| Request/response field policy, route allowlist, edge fields, loop, in-flight bound, failure logs | yes (`forwarding_test.go`, `limits_test.go`) | — | F14–F18 |
 | Token fetch (Basic auth, cap, non-200, expiry) | yes | — | fetcher tests |
-| Config secret loading and URL validation | yes | — | config tests |
-| Server timeouts, header cap, upstream deadlines, shutdown | no | pre-mainnet limits measurement | F20 |
+| Config secret loading and URL validation; secret re-read after a refusal | yes | — | config and fetcher tests, `TestSecretRotationWithoutRestart` |
+| Server settings, header cap, upstream deadlines, in-flight bound | yes (loopback listeners and local servers; short deadlines) | — | F20 |
+| Graceful shutdown; limits sized and measured under load | no | pre-mainnet limits measurement (maintainer) | F20 remainder |
+| Image carries the licence notices | CI job `image` (container build; rootless podman locally) | — | F22 |
 | Live token service + registry end to end | no hermetic test; the platform-probe catalogue check exercises the real chain | staging cluster | `platform-probe` status check |
 | Negative check that a pod outside the allowed set cannot reach `:8181` | no | pre-mainnet, platform | F19 |
 
@@ -962,7 +1101,7 @@ cosign-verified on 2026-10-09.
 
 - [x] builds; tests + race pass; runs from `.env.example`; `SECURITY.md` present
 - [x] fail-closed, strip, remap, redirect behaviour tested — F13 (the body-cap test was removed with the buffer, F8)
-- [x] B.PX-1 and B.PX-2 complete; hop-by-hop, redirect (probe leg), method, `..` and in-flight-limit tests green — F14, F15; the deadline and header-cap tests are F20 (pre-mainnet)
+- [x] B.PX-1 and B.PX-2 complete; hop-by-hop, redirect (both legs), method, `..` and in-flight-limit tests green — F14, F15; the deadline and header-cap tests landed in 0.1.7 (F20)
 - [x] configuration fails startup on invalid values — F1
 - [x] algorithm and secret rules: secret from a mounted file, nothing secret in source or logs; fail-closed tests green — F13
 
@@ -982,13 +1121,14 @@ cosign-verified on 2026-10-09.
 - [x] bounded cache + single-flight (F3, 0.1.4)
 - [x] release gate = CI gates; toolchain aligned; image scan before signing (F9, 0.1.4–0.1.5)
 - [x] SBOM, signing and provenance in place
-- [x] SIGTERM drains in-flight requests; health endpoint reveals nothing (`main.go:94-103`, `/healthz`)
+- [x] SIGTERM drains in-flight requests; health endpoint reveals nothing (`main.go:78-87`, `/healthz`)
 - [x] release build flags stated (`-trimpath`, `CGO_ENABLED=0`, version injection); image per the IMG lens
-- [ ] F5's platform transport cited in SECURITY.md; rotation procedure documented (F5, F10, F12) — documentation gate; the rotation rehearsal is a maintainer task
-- [ ] README `cosign verify` pinned to the publish workflow; licence notices shipped in the image; `docs/` committed (F12, F22) — maintainer
-- [ ] key rotation with overlap rehearsed; compromise procedure documented for the `registry-browser` secret (F10) — maintainer
+- [x] F5's platform transport cited in SECURITY.md; rotation procedure documented (F5, F10, F12) — `SECURITY.md` "Transport to the token service and the registry" (decision D18) and "Client-secret rotation and compromise", 0.1.7, commit pending; the rotation rehearsal is the maintainer line below
+- [x] README `cosign verify` pinned to the publish workflow; licence notices shipped in the image; `docs/` committed (F12, F22) — README regexp pinned to `docker-publish.yml@refs/tags/v*`; notices in `/usr/share/doc/registry-auth-proxy/` with the `image` CI job (`scripts/check-image-notices.sh`, `image notices OK` under rootless podman); `docs/` committed with the 0.1.7 commit (commit pending)
+- [ ] key rotation with overlap rehearsed; compromise procedure documented for the `registry-browser` secret (F10) — the compromise procedure is documented (`SECURITY.md`, 0.1.7) and rotation is restart-free (`TestSecretRotationWithoutRestart`); the rehearsal against the live cluster, a cadence and a last-rotation record are maintainer tasks
 - [ ] the negative origin check runs on a schedule (F19) — platform, maintainer
-- [ ] limits sized for the plan tier and measured; deadline and header-cap tests (F20)
+- [x] deadline and header-cap tests (F20) — `limits_test.go`, `dial_linux_test.go`, `cmd/server/main_test.go`; 0.1.7, commit pending
+- [ ] limits sized for the plan tier and measured under load (F20 remainder) — maintainer
 - [ ] registry credential inventory (scope, holder, rotation date) — maintainer, `OPERATOR_TASKS.md` "Image registry credentials", deferred to launch
 - [ ] external review of the forwarding path — awaiting external review
 
@@ -1016,8 +1156,9 @@ cosign-verified on 2026-10-09.
   the platform-probe catalogue check is the live drift detector.
 - **On-chain-truth boundary** and **chain-access layering** — N/A (no chain involvement).
 - **Deployment readiness** — Section D, kept current.
-- **Pre-v0.2 policy:** F18–F22 may change behaviour (route allowlist, notices) without shims. The next
-  release is 0.1.7.
+- **Pre-v0.2 policy:** F18–F22 changed behaviour (route allowlist, edge fields, notices) without shims in
+  0.1.7 (release pending). Consumers: joxit's nginx forwards only `/v2`, which is what the allowlist
+  admits; nothing else calls the proxy except `platform-probe` (`/v2/_catalog`).
 
 ## Normative requirements (MUST)
 
@@ -1032,16 +1173,19 @@ cosign-verified on 2026-10-09.
    upstream CORS or `Set-Cookie` to the UI — holds (I5, I17, F14).
 7. The proxy MUST refuse a looped request, bound the forwards in flight and every upstream wait, and
    cap request headers — holds in code (I18–I20, F15); untested for the deadlines and header cap (F20).
-8. The proxy MUST forward only listed routes with a validated path — **partly** (F18).
-9. Failures MUST map to fixed `502`/`503`/`508` bodies with no upstream detail in responses or default
-   logs — holds for forwards (I21, F16); the token-fetch log carries the endpoint URL (F17).
+8. The proxy MUST forward only listed routes with a validated path — holds (I10, F18).
+9. Failures MUST map to fixed `502`/`503`/`508`/`404`/`400` bodies with no upstream detail in responses
+   or default logs — holds for forwards and for the token fetch (I21, F16, F17).
+10. The proxy MUST NOT forward forwarding headers or edge-added fields (`X-Forwarded-*`, `Forwarded`,
+    `X-Real-Ip`, `Cf-*`) to the registry — holds (I23, F18).
+11. A rotated client secret MUST take effect without a restart or fail closed — holds (I24, F10).
 
 **AUTH lens baseline:**
 
 | ID | Holds? | Evidence |
 | --- | --- | --- |
 | AUTH-M1 | N/A (the proxy does not verify tokens; the registry does) | — |
-| AUTH-M2 | yes for custody (mounted file, never env or logs); rotation: workspace procedure only, no cadence or compromise steps | F10 |
+| AUTH-M2 | yes for custody (mounted file, never env or logs); rotation and compromise steps in `SECURITY.md`, restart-free; no cadence or rehearsal record (maintainer) | F10 |
 | AUTH-M3 | N/A (issued by the token service) | — |
 | AUTH-M4 | yes (delegated; fail closed) | I2 |
 | AUTH-M5 | yes — the proxy requests read scopes only, the token service grants requested ∩ Keto, Keto holds pull and catalog | F8, F21 |
@@ -1056,9 +1200,9 @@ cosign-verified on 2026-10-09.
 
 | ID | Holds? | Evidence |
 | --- | --- | --- |
-| GO-M1 | yes (`ReadHeaderTimeout` 10 s, `IdleTimeout` 120 s, `MaxHeaderBytes` 32 KiB, no body is read; `WriteTimeout` intentionally absent for streaming) | F11, F15 |
-| GO-M2 | yes (fetch 10 s + 64 KiB; upstream dial 5 s and response-header 30 s; streamed bodies) | F13, F15 |
-| GO-M3 | N/A (no filesystem serving); path hygiene: F18 | — |
+| GO-M1 | yes (`ReadHeaderTimeout` 10 s, `IdleTimeout` 120 s, `MaxHeaderBytes` 32 KiB with a `431` test, no body is read; `WriteTimeout` intentionally absent for streaming) | F11, F15, F20 |
+| GO-M2 | yes (fetch 10 s + 64 KiB; upstream dial 5 s and response-header 30 s, both tested; streamed bodies) | F13, F15, F20 |
+| GO-M3 | N/A (no filesystem serving); path hygiene: route allowlist, F18 | — |
 | GO-M4 | N/A (no token verification) | — |
 | GO-M5 | yes | I8 |
 | GO-M6 | N/A (no client address is used; the per-visitor limit is nginx's) | F3 |
@@ -1068,20 +1212,20 @@ cosign-verified on 2026-10-09.
 **IMG lens baseline:** IMG-M1 yes (builder digest checked against the toolchain, `scratch`); IMG-M2 yes
 (`.dockerignore` excludes secrets, env files and `.git`); IMG-M3 yes; IMG-M4 yes; IMG-M5 yes (pod
 context in `k8s/base/registry/auth-proxy`); IMG-M6 yes (overlay digest from `config/images.yaml`; the
-base tag `0.1.1` is stale, F12); IMG-M7 yes (signature, SPDX SBOM attestation, provenance); IMG-M8
-partial (scan before sign and SBOM hold; licence notices F22; the README `cosign verify` is not
-workflow-pinned, F12).
+base tag `0.1.1` is stale, F12, a platform item); IMG-M7 yes (signature, SPDX SBOM attestation,
+provenance); IMG-M8 yes from 0.1.7 (scan before sign, SBOM, licence notices F22, and the README `cosign
+verify` pinned to the workflow, F12).
 
 **PROXY lens baseline:**
 
 | ID | Holds? | Evidence |
 | --- | --- | --- |
-| PX-M1 | partial — methods and `..` enforced, upstream URL from configuration; no route allowlist | F18 |
-| PX-M2 | yes — hop-by-hop and `Connection`-named fields removed both ways; `Via` set by the proxy; other forwarding fields copied from the trusted nginx hop | F14, F18 |
+| PX-M1 | yes — methods and a route allowlist enforced, canonical paths only, upstream URL from configuration | F18 |
+| PX-M2 | yes — hop-by-hop and `Connection`-named fields removed both ways; `Via` set by the proxy; `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `Cf-*` dropped | F14, F18 |
 | PX-M3 | yes — `Set-Cookie`, `Access-Control-*` and `Connection`-named fields dropped | F14 |
 | PX-M4 | yes | F4 |
-| PX-M5 | yes in code (header read, idle, header size, in-flight, dial, response-header); tests missing for the deadlines and header cap | F15, F20 |
-| PX-M6 | yes for forwards; the token-fetch log carries the endpoint URL | F16, F17 |
+| PX-M5 | yes (header read, idle, header size, in-flight, dial, response-header; the deadlines, bound and header cap are tested; the 10 s header-read timeout is pinned only by value) | F15, F20 |
+| PX-M6 | yes for forwards and for the token fetch | F16, F17 |
 | PX-M7 | N/A (no admission state) | — |
 | PX-M8 | N/A for the upstream (the registry is its own gate); the proxy's door is bounded by NetworkPolicy and Access, with no scheduled negative check | F19 |
 | PX-M9 | yes (invalid configuration fails startup; strict defaults) | F1 |
@@ -1093,34 +1237,44 @@ workflow-pinned, F12).
 - **S2** *(done in 0.1.4)* bounded cache with expiry-first eviction and `Flight` single flight (F3).
 - **S3** MAY negatively cache "no access" outcomes per scope for a short TTL, to blunt the remaining
   unique-name amplification (F3).
-- **S4** MAY re-read `CLIENT_SECRET_FILE` when the token service answers `401`, to make rotation
+- **S4** *(done in 0.1.7)* `CLIENT_SECRET_FILE` is re-read when the token service answers `401`; rotation is
   restart-free (F10).
-- **S5** SHOULD log the failure class (`errorKind`) instead of the error text for token-fetch failures
-  (F17).
-- **S6** SHOULD allow-list the `/v2` read routes, forward the cleaned path, reject empty and `.`
-  segments, and build the forwarded fields from an allowlist (F18).
-- **S7** SHOULD make the upstream deadlines fields of `Handler`, add a stalled-upstream test and a
-  `431` header-cap test, and a recording-upstream redirect test on the credentialed leg (F20, F4).
+- **S5** *(done in 0.1.7)* the token-fetch failure is logged by class (`token.FailureClass`), not by error
+  text (F17).
+- **S6** *(done in 0.1.7)* the `/v2` read routes are allow-listed with the registry's grammars, the path is
+  never rewritten, empty and `.` segments are refused, and `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`,
+  `True-Client-Ip`, `Cdn-Loop` and `Cf-*` are dropped. The remaining request fields stay a denylist on
+  purpose (F18).
+- **S7** *(done in 0.1.7)* the deadlines are fields of the handler's limits; stalled-upstream, dial,
+  slow-body, in-flight-bound, `431` header-cap and credentialed-redirect tests exist (F20, F4).
 - **S8** SHOULD narrow `:8181` in `networkpolicy.yaml` to the `registry-ui` pod (plus platform-probe) and
   add a scheduled negative probe (F19).
 - **S9** SHOULD drop `registry:push` from the `registry-browser` client registration (F21).
-- **S10** SHOULD, in one patch release: add transport and rotation text to SECURITY.md, pin the README
-  `cosign verify` to the publish workflow, ship licence notices (`/THIRD_PARTY_LICENSES`), correct the
-  README build example, and commit `docs/` (F5, F10, F12, F22).
+- **S10** *(done in 0.1.7, except the base manifest tag in `k8s/`)* transport and rotation text in
+  SECURITY.md, the README `cosign verify` pinned to the publish workflow, licence notices in
+  `/usr/share/doc/registry-auth-proxy/`, the README build example corrected, `docs/` committed (F5, F10, F12,
+  F22).
+- **S11** SHOULD, in the platform repository: list `registry-auth-proxy-secret` in `SECRETS.md`, name it in
+  `docs/auth/OPERATIONS.md` "Rotate a client secret" (update it before the Job; restart only as the
+  fallback), bump or placeholder the tag `0.1.1` in `k8s/base/registry/auth-proxy/deployment.yaml` (F10,
+  F12).
 
 ## Open questions (`OQ#`)
 
 1. **OQ1** *(baseline OQ1)* NetworkPolicy enforcement and the transport path for proxy ↔ token service.
    Facts recorded: mutual authentication is not run (decision D18) and WireGuard covers only inter-node
-   traffic (F5); a default-deny policy exists but admits whole namespaces to `:8181` (F19). Should
-   `:8181` be narrowed to the `registry-ui` pod, and should SECURITY.md link the exact manifests?
+   traffic (F5); a default-deny policy exists but admits whole namespaces to `:8181` (F19). SECURITY.md
+   now names the manifest and the whole-namespace admission (0.1.7). Open: should `:8181` be narrowed to
+   the `registry-ui` pod (plus `platform-probe`)? Recommendation: yes — a platform change, S8; no
+   product decision is involved.
 2. **OQ2** *(baseline OQ2)* Cache growth. (Decided 2026-10-08, 0.1.4: a fixed bound of 512 entries with
    expiry-first eviction and single flight; no per-client limit in the proxy — the per-visitor limit is
    nginx's — see F3.) Open remainder: is the unique-name amplification acceptable without a negative
    cache (S3)?
-3. **OQ3** *(baseline OQ3)* `%2F` in repository names: is an encoded slash ever expected? net/http
-   decodes it before `NormalizePath`, and `roundTrip` forwards `r.URL.Path` (decoded), so `%2F`
-   becomes `/` upstream (F18).
+3. **OQ3** *(baseline OQ3)* `%2F` in repository names. (Decided 2026-10-18, 0.1.7: an encoded slash
+   decodes to `/`, which is the legal hierarchy separator of a repository name; `Route` validates the
+   decoded path against the name grammar and forwards exactly what it checked, so nothing else can ride
+   in on an encoding — see F18.)
 4. **OQ4** *(baseline OQ4)* Upstream redirect policy — **(Decided 2026-10-03: pass through; `CheckRedirect` →
    `ErrUseLastResponse`, tested — see F4.)**
 5. **OQ5** *(baseline OQ5)* `go.mod` 1.26.6 vs the toolchain. (Decided 2026-10-09, 0.1.5: `go.mod`
@@ -1131,21 +1285,27 @@ workflow-pinned, F12).
    (F8). Should the toggle be turned off so the UI stops offering it, or is deletion to return through
    a separate, authenticated path?
 7. **OQ7** Should the Hydra `registry-browser` client lose its `registry:push` scope now (S9, F21), or
-   stay aligned with the other clients until the next client-setup change?
+   stay aligned with the other clients until the next client-setup change? Recommendation: drop it at the
+   next client-setup change; three layers withhold push today, so there is no urgency. A platform
+   manifest (`k8s/base/auth/jobs/hydra-client-setup.yaml`), not edited here.
 
 ## Risks
 
 - **Read-only by layers:** the Keto tuples, the token service's intersection and the proxy's own
   filters agree today; the Hydra registration alone is broader than use (F21).
 - **Availability:** the proxy is a single replica with a 64-forward bound; a registry or token-service
-  outage ends in `502`/`503` by design, and a rotated secret breaks browsing until the pod restarts
-  (F10).
+  outage ends in `502`/`503` by design, and a rotated secret breaks browsing only until the mounted
+  file is refreshed (F10; no restart needed since 0.1.7, but the order of the rotation steps matters).
 - **Plaintext hop:** proxy ↔ token-service traffic is in-cluster HTTP on one node with no mutual
-  authentication; a hostile pod in an admitted namespace is bounded only by NetworkPolicy (F5, F19).
+  authentication; a hostile pod in an admitted namespace is bounded only by NetworkPolicy (F5, F19);
+  `SECURITY.md` states this since 0.1.7.
 - **Supply-chain mutability:** the image depends on the pinned builder, the Go toolchain and the GitHub
   and Sigstore services; registry push tokens are long-lived until the maintainer inventory is done.
-- **Unmeasured limits:** the 64-forward bound, deadlines and header cap are untested and unmeasured
-  under load (F20).
+- **Unmeasured limits:** the 64-forward bound, deadlines and header cap are tested for behaviour (F20) but
+  not sized or measured under load for the plan tier (maintainer, pre-mainnet).
+- **Route allowlist drift:** a UI or registry upgrade that adds a read route (joxit 2.6.0 uses the five
+  shapes in F18) would see `404` until `routeRules` is extended; the platform-probe catalogue check and
+  the registry-ui itself would show it at once.
 
 ---
 
@@ -1202,16 +1362,51 @@ workflow-pinned, F12).
     `Cf-Access-Jwt-Assertion` header on the proxy hop (F18) were not observed.
   - Registry credential inventory: a maintainer item (`OPERATOR_TASKS.md` "Image registry credentials"),
     deferred to launch.
+- 2026-10-18 — fix wave, 0.1.7 (local commit, release pending; commit pending). Toolchain
+  `GOTOOLCHAIN=go1.26.9`.
+  - **Resolved:** F17 (token-fetch failures logged by class and status, `token.FetchError`), F18 (route
+    allowlist with the registry's grammars, canonical never-rewritten paths, `X-Forwarded-*`/`Forwarded`/
+    `X-Real-Ip`/`True-Client-Ip`/`Cdn-Loop`/`Cf-*` dropped), F20 (limits as handler fields; stalled
+    upstream, dial, slow body, in-flight bound, `431` header cap, server settings and wiring tests;
+    `cmd/server` 0% to 38.6%), F22 (licence notices and `LICENSE` in the image, `scripts/` and the `image` CI
+    job).
+  - **Also fixed:** the query-string half of F11 (the token request URL is built with `url.Parse` and a
+    merged query; `TestFetchKeepsEndpointQuery`).
+  - **Mitigated, with the remainder named:** F10 (procedure documented, rotation restart-free via a
+    one-shot re-read on a token-service `401`; cadence, last-rotation record and live rehearsal are
+    maintainer tasks; the proxy's Secret still has to be added to `SECRETS.md` and `docs/auth/OPERATIONS.md`),
+    F12 (`SECURITY.md` transport and rotation text, README `cosign verify` pinned, `docs/` committed; the
+    base manifest tag `0.1.1` is in `k8s/`). F19 and F21 untouched (platform: NetworkPolicy narrowing and
+    the Hydra client scope; recorded in F19, F21, OQ1, OQ7).
+  - **Correction:** F18's claim that `//` and `.` segments were forwarded as sent was true only of the
+    `Handler` used directly; the wired server's `ServeMux` already answered `307` to the cleaned path
+    (pinned by `TestWiredRoutePolicy`). The real gaps were the trailing slash, the decoded forms and the
+    absence of an allowlist.
+  - **Also added:** `TestForward_NoCredentialReachesAForeignRedirectTarget` (F4, the credentialed leg
+    named in its note; row I25).
+  - **Decided:** OQ3 (encoded slash). OQ1, OQ7 keep recommendations; OQ2, OQ6 unchanged.
+  - **Measured:** `go vet` and `gofmt -l` clean; `go test -race -cover ./...` ok — proxy 96.9%, token
+    95.5%, config 86.7%, `cmd/server` 38.6%; 59 test functions (142 runs), none skipped; three
+    consecutive `-race` runs of the new limit tests green; golangci-lint v2.13.0 `0 issues`; govulncheck
+    v1.8.0 `No vulnerabilities found`; rootless podman build and `scripts/check-image-notices.sh`
+    `image notices OK`.
+  - **Checked against the pinned UI:** joxit/docker-registry-ui 2.6.0 — nginx proxies only `location /v2`
+    and the script uses `/v2/`, `/v2/_catalog?n=`, `/v2/<name>/tags/list`, `/v2/<name>/manifests/<ref>`.
+  - **Totals (22):** 13 RESOLVED (F1, F2, F4, F7, F8, F9, F14, F15, F16, F17, F18, F20, F22), 7 MITIGATED
+    (F3, F5, F10, F11, F12, F19, F21), 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive (F6, F13).
+  - **Not done / not mine:** the registry credential inventory, the rotation rehearsal, the external
+    review, the scheduled negative origin check (F19), the Hydra client scope (F21) — maintainer or
+    platform.
 
 ## Pre-save consistency checklist (this pass)
 
-- [x] Section A ↔ findings: every row HOLDS or carries its finding (I10 → F18, I20 → F20, I21 → F17);
-  no GAP row beside a RESOLVED finding.
+- [x] Section A ↔ findings: every row HOLDS (2026-10-18: I10, I20, I21 now cite F18, F20, F17 as resolved;
+  I23–I25 added); no GAP row beside a RESOLVED finding.
 - [x] Finding header ↔ body: consistent (original 2026-10-03 text kept as history under each header, the
   remediation paragraph states what was done).
 - [x] Template line: base + GO + IMG + AUTH + PROXY at the registry dates (2026-10-08); untriggered lenses named.
-- [x] Corpus IDs preserved (F1–F13, OQ1–OQ6); new IDs F14–F22 / OQ7.
+- [x] Corpus IDs preserved (F1–F13, OQ1–OQ6); new IDs F14–F22 / OQ7 (no new finding in the 2026-10-18 pass).
 - [x] Section D ↔ dispositions (unticked items name their gate: pre-mainnet or maintainer).
-- [x] Executive summary ↔ dispositions and ceiling (Medium; realised Low).
-- [x] C.1 counts measured 2026-10-09.
+- [x] Executive summary ↔ dispositions and ceiling (Medium; realised Low): 13 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive = 22.
+- [x] C.1 counts measured 2026-10-18 (0.1.7 tree).
 - [x] Re-verification log entry added.
