@@ -34,9 +34,12 @@ origin-lock rows only).
 - Running in namespace `registry` (`k8s/base/registry/auth-proxy`, one replica, ClusterIP `:8181`, no
   Ingress). It is an internal cluster service, reached by joxit's nginx in the same namespace; joxit is
   published as `registry-ui.meddleware.co.uk` behind Cloudflare Access.
-- Fix wave 2026-10-18: **0.1.7** (local commit, release pending). The deployed image is still 0.1.6;
-  what this audit says about 0.1.7 is not live until it is released. `docs/` (this audit) is committed
-  with it.
+- Fix wave 2026-10-18: **0.1.7**, released and deployed 2026-10-18: tag `v0.1.7` = `a3678e4` (fix commit
+  `de46a96`), image `quay.io/meddleware-org/registry-auth-proxy:0.1.7@sha256:150382016712b23b60c991996b5b69293b6dde5f481447d4c0574197ef2f097e`
+  (Docker Hub, same digest). The cosign keyless signature was verified 2026-10-18 against the
+  workflow-anchored identity (`docker-publish.yml@refs/tags/v*`, `verify-digests.sh`, 16/16 valid) and the
+  rollout (`kubectl apply -k`, registry overlay) succeeded. What this audit says about 0.1.7 is live. on-node route checks after the rollout (2026-10-18, from the release facts; run against the in-cluster service, not re-run by this audit pass): allowed routes answered `200`, write methods `405`, non-routes `404` and non-canonical paths `400`, as the route allowlist (F18) specifies. The 0.1.6 digest `sha256:d98c347c…1581` above is the
+  superseded 2026-10-09 deployment. `docs/` (this audit) is committed with it.
 
 **Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18
 **Reviewer:** Internal review
@@ -49,7 +52,7 @@ origin-lock rows only).
   proxy *requests*. It cannot exceed what Keto grants the identity.
 - Realised ceiling at this pass: **Low** (every open item is Low or Info and none widens access).
 
-**Status:** re-verified 2026-10-09; fix wave 2026-10-18 (0.1.7, release pending).
+**Status:** re-verified 2026-10-09; fix wave 2026-10-18 (0.1.7, released and deployed 2026-10-18; signature verified, rollout succeeded, route checks passed).
 
 - The baseline was supplied to this review; this file is committed with the 0.1.7 fix wave (F12).
 - **Corpus IDs F1–F13 are preserved.** New findings start at F14.
@@ -70,7 +73,7 @@ origin-lock rows only).
 
 | Field | Value |
 | --- | --- |
-| Images | `quay.io/meddleware-org/registry-auth-proxy:0.1.6@sha256:d98c347c…1581`; `docker.io/meddleware/registry-auth-proxy:0.1.6` (same digest); best-effort mirror on the self-hosted registry |
+| Images | `quay.io/meddleware-org/registry-auth-proxy:0.1.7@sha256:150382016712b23b60c991996b5b69293b6dde5f481447d4c0574197ef2f097e`; `docker.io/meddleware/registry-auth-proxy:0.1.7` (same digest; cosign-verified 2026-10-18; superseded 0.1.6 was `sha256:d98c347c…1581`); best-effort mirror on the self-hosted registry |
 | Base images | builder `golang:1.26.9-bookworm@sha256:d9c68c2c…641453c`; runtime `scratch` (+ the CA bundle copied from the builder) |
 | Runtime user | `65534:65534` (`USER` in the image; pod `runAsNonRoot`) |
 | Runtime FS | read-only root; no writable mount; the secret mounted read-only at `/etc/registry-auth-proxy` (`CLIENT_SECRET_FILE`) |
@@ -101,8 +104,8 @@ wave, F12).
 
 > **Access note:** the review ran against the workspace checkout `repos/registry-auth-proxy` at `main`
 > = `v0.1.6` (`7928960`) and the read-only manifests under `k8s/`; nothing was changed in that pass. The
-> 2026-10-18 fix wave changed this repository only (0.1.7, a local commit; nothing pushed, tagged or
-> published) and left `k8s/` and the workspace documents untouched (the items for them are named in
+> 2026-10-18 fix wave changed this repository only (0.1.7, a local commit at the time of that pass; it
+> was tagged and released later the same day) and left `k8s/` and the workspace documents untouched (the items for them are named in
 > F10, F12, F19, F21).
 
 ---
@@ -112,7 +115,7 @@ wave, F12).
 A small, stdlib-only proxy (about 1,300 lines of Go plus 2,100 lines of tests).
 
 **Every finding of the 2026-10-03 pass was fixed in 0.1.4–0.1.6 and verified against `v0.1.6`
-(`7928960`); the 2026-10-18 fix wave (0.1.7, release pending) then closed the lens items F17, F18, F20
+(`7928960`); the 2026-10-18 fix wave (0.1.7, released and deployed 2026-10-18) then closed the lens items F17, F18, F20
 and F22 and the documentation and rotation gaps F10 and F12.** Coverage on the 0.1.7 tree is
 **96.9 / 95.5 / 86.7 / 38.6%** for proxy / token / config / `cmd/server` (59 test functions, 142 runs with
 subtests). Verified in code and tests:
@@ -248,7 +251,8 @@ Critical / High / Medium / Low / Info / Positive.
 | `CONTAINER_CLI=podman sh scripts/check-image-notices.sh` | `image notices OK` (rootless podman build of the Dockerfile; the notices and `LICENSE` are present in the image) |
 | Registries (2026-10-10) | quay.io and Docker Hub tag `0.1.6` both resolve to `sha256:d98c347c…1581`, equal to `config/images.yaml` and the overlay pin |
 | Live (2026-10-10) | `GET` and `POST https://registry-ui.meddleware.co.uk/v2/_catalog` without a session answer `302` to the Cloudflare Access login: the UI that fronts the proxy is not anonymous |
-| Registries (2026-10-18) | not re-checked: 0.1.7 is not released, the deployed image is 0.1.6 |
+| Registries (2026-10-18) | 0.1.7 released and deployed 2026-10-18: `sha256:15038201…f097e`, cosign-verified against the workflow-anchored identity (`verify-digests.sh` 16/16); quay.io and Docker Hub tags were not re-queried by this audit pass |
+| On-node route checks (2026-10-18, after the rollout) | allowed routes `200`, write methods `405`, non-routes `404`, non-canonical paths `400` (from the release facts; not re-run by this pass) |
 | 2026-10-03 scratch probes (F3, F7, F8, F11) | superseded: each scenario is now a committed test (see the findings) |
 
   The 2026-10-09 results above are kept as the baseline of the 0.1.6 review; the 2026-10-18 rows are the
@@ -619,7 +623,7 @@ repository is fixed; the base Deployment manifest tag is in `k8s/`, outside it)
     re-read, the notices and the new tests;
   - `docs/` (this audit) is committed with the release commit.
 - **Still open, outside this repository:** `k8s/base/registry/auth-proxy/deployment.yaml` names tag
-  `0.1.1` (the cluster overlay replaces it with the 0.1.6 digest, so the cluster is correct; the base
+  `0.1.1` (the cluster overlay replaces it with the 0.1.7 digest since 2026-10-18 (0.1.6 before), so the cluster is correct; the base
   alone would run 0.1.1). Platform item: bump or remove the tag in the base, or make the base reference
   the placeholder the overlay already replaces. Not edited here.
 
@@ -1019,8 +1023,8 @@ GitHub build-provenance attestation, plus BuildKit `provenance: mode=max` (`sbom
 BuildKit scanner pull is unreliable); none of these steps uses `continue-on-error`. The self-hosted
 registry push (`publish-private`) is a best-effort, unsigned mirror. From 0.1.7 the image also carries
 its licence notices (F22) and the `verify` job includes the `image` check. The 0.1.6 digest
-`sha256:d98c347c…1581` is the same on quay.io, Docker Hub and in `config/images.yaml`, and was
-cosign-verified on 2026-10-09.
+`sha256:d98c347c…1581` was the same on quay.io, Docker Hub and in `config/images.yaml`, and was
+cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the deployed one and was cosign-verified on 2026-10-18.
 
 ### B.AUTH-1 Key & credential inventory
 
@@ -1112,7 +1116,7 @@ cosign-verified on 2026-10-09.
 - [x] method allowlist + pull-only scope requests (F8, 0.1.4)
 - [x] B.AUTH-1 key & credential inventory and B.AUTH-2 client & relation inventory complete (this audit)
 - [x] proxies strip inbound credentials; the proxy requests no scope beyond pull/catalog (F8, F14)
-- [x] non-root runtime; pod security context complete; probes and limits set; deployed by digest from `config/images.yaml` (cosign-verified 2026-10-09)
+- [x] non-root runtime; pod security context complete; probes and limits set; deployed by digest from `config/images.yaml` (cosign-verified 2026-10-09 for 0.1.6 and 2026-10-18 for 0.1.7)
 - [x] client identity: nothing keyed on an address; secrets never logged (I8)
 - [ ] origin lock verified positively and negatively — the proxy's door is bounded by NetworkPolicy and Access but the negative check does not exist yet (F19); maintainer/platform, pre-mainnet
 
@@ -1157,7 +1161,7 @@ cosign-verified on 2026-10-09.
 - **On-chain-truth boundary** and **chain-access layering** — N/A (no chain involvement).
 - **Deployment readiness** — Section D, kept current.
 - **Pre-v0.2 policy:** F18–F22 changed behaviour (route allowlist, edge fields, notices) without shims in
-  0.1.7 (release pending). Consumers: joxit's nginx forwards only `/v2`, which is what the allowlist
+  0.1.7 (released and deployed 2026-10-18). Consumers: joxit's nginx forwards only `/v2`, which is what the allowlist
   admits; nothing else calls the proxy except `platform-probe` (`/v2/_catalog`).
 
 ## Normative requirements (MUST)
@@ -1362,7 +1366,7 @@ verify` pinned to the workflow, F12).
     `Cf-Access-Jwt-Assertion` header on the proxy hop (F18) were not observed.
   - Registry credential inventory: a maintainer item (`OPERATOR_TASKS.md` "Image registry credentials"),
     deferred to launch.
-- 2026-10-18 — fix wave, 0.1.7 (local commit, release pending; commit `de46a96`). Toolchain
+- 2026-10-18 — fix wave, 0.1.7 (commit `de46a96`; released and deployed later the same day, see the next entry). Toolchain
   `GOTOOLCHAIN=go1.26.9`.
   - **Resolved:** F17 (token-fetch failures logged by class and status, `token.FetchError`), F18 (route
     allowlist with the registry's grammars, canonical never-rewritten paths, `X-Forwarded-*`/`Forwarded`/
@@ -1397,6 +1401,8 @@ verify` pinned to the workflow, F12).
   - **Not done / not mine:** the registry credential inventory, the rotation rehearsal, the external
     review, the scheduled negative origin check (F19), the Hydra client scope (F21) — maintainer or
     platform.
+
+- 2026-10-18 — released and deployed (`v0.1.7` = `a3678e4`, `0.1.7@sha256:150382016712b23b60c991996b5b69293b6dde5f481447d4c0574197ef2f097e`), verified live. Cosign keyless signature verified against the workflow-anchored identity (`verify-digests.sh` 16/16); rollout (`kubectl apply -k`, registry overlay) succeeded. On-node route checks after the rollout: allowed routes `200`, write methods `405`, non-routes `404`, non-canonical paths `400` (release facts). Still open and unchanged: F19, F21 (platform), the rotation rehearsal, the credential inventory and the external review.
 
 ## Pre-save consistency checklist (this pass)
 
