@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/meddleware-org/registry-auth-proxy/internal/token"
 )
 
 // recordingUpstream answers 200 and records the request fields it received. When challenge is true it first
@@ -161,10 +164,7 @@ func TestForward_ConcurrencyIsBounded(t *testing.T) {
 }
 
 func TestForward_UpstreamFailureLogsNoHostname(t *testing.T) {
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLog(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	upstreamURL := srv.URL
@@ -181,5 +181,173 @@ func TestForward_UpstreamFailureLogsNoHostname(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), `"cause":"unreachable"`) {
 		t.Errorf("the log lacks the failure class: %s", buf.String())
+	}
+}
+
+// captureLog routes the default logger to a buffer for the duration of the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestForward_EdgeFieldsAreNotForwarded: forwarding headers and the fields the edge adds (including the
+// Cloudflare Access assertion, a bearer for the UI application) do not reach the registry (F18).
+func TestForward_EdgeFieldsAreNotForwarded(t *testing.T) {
+	srv, got := recordingUpstream(t, nil)
+	h := newTestHandler(t, srv.URL, "proxy-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil)
+	dropped := map[string]string{
+		"X-Forwarded-For":                    "203.0.113.9",
+		"X-Forwarded-Host":                   "registry-ui.example",
+		"X-Forwarded-Proto":                  "https",
+		"X-Forwarded-Port":                   "443",
+		"Forwarded":                          "for=203.0.113.9;host=registry-ui.example",
+		"X-Real-Ip":                          "203.0.113.9",
+		"True-Client-Ip":                     "203.0.113.9",
+		"Cdn-Loop":                           "cloudflare",
+		"Cf-Access-Jwt-Assertion":            "eyJhbGciOi.access.assertion",
+		"Cf-Access-Authenticated-User-Email": "user@example.com",
+		"Cf-Connecting-Ip":                   "203.0.113.9",
+		"Cf-Ray":                             "abc-LHR",
+	}
+	for k, v := range dropped {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Range", "bytes=0-9")
+	req.Header.Set("User-Agent", "joxit")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	up := got()
+	for k := range dropped {
+		if v := up.Get(k); v != "" {
+			t.Errorf("%s reached the registry: %q", k, v)
+		}
+	}
+	for k, want := range map[string]string{"Accept": "application/json", "Range": "bytes=0-9", "User-Agent": "joxit"} {
+		if up.Get(k) != want {
+			t.Errorf("%s = %q, want %q (an ordinary field must be forwarded)", k, up.Get(k), want)
+		}
+	}
+}
+
+// TestForward_OnlyRegistryReadRoutes: a path that is not a canonical registry read route is answered
+// without contacting the registry or the token service (F18).
+func TestForward_OnlyRegistryReadRoutes(t *testing.T) {
+	var upstreamHits, tokenHits int
+	var mu sync.Mutex
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		upstreamHits++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		tokenHits++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "t", "expires_in": 300})
+	}))
+	defer tokenSrv.Close()
+	h := NewHandler(upstream.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "c", "s"))
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/", http.StatusNotFound},
+		{"/metrics", http.StatusNotFound},
+		{"/v2/token", http.StatusNotFound},
+		{"/v2/foo/blobs/uploads/abc", http.StatusNotFound},
+		{"/v2/Foo/tags/list", http.StatusNotFound},
+		{"/v2//foo/tags/list", http.StatusBadRequest},
+		{"/v2/foo/./tags/list", http.StatusBadRequest},
+		{"/v2/foo/../bar/tags/list", http.StatusBadRequest},
+		{"/v2/_catalog/", http.StatusBadRequest},
+		{"/v2/foo%2F..%2Fbar/tags/list", http.StatusBadRequest}, // an encoded traversal decodes to ..
+		{"/v2/foo%00/tags/list", http.StatusNotFound},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("GET %q: status %d, want %d", tc.path, rec.Code, tc.want)
+		}
+	}
+	if upstreamHits != 0 || tokenHits != 0 {
+		t.Errorf("upstream hits %d, token hits %d; want none for refused paths", upstreamHits, tokenHits)
+	}
+
+	// An allowed route still goes through, and the registry receives exactly the path that was checked.
+	var seen string
+	up2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer up2.Close()
+	h2 := NewHandler(up2.URL, token.NewCache(30*time.Second), token.NewFetcher(tokenSrv.URL, "c", "s"))
+	rec := httptest.NewRecorder()
+	h2.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/org/app/manifests/sha256:abc123?x=1", nil))
+	if rec.Code != http.StatusOK || seen != "/v2/org/app/manifests/sha256:abc123" {
+		t.Errorf("allowed route: status %d, upstream path %q", rec.Code, seen)
+	}
+}
+
+// TestForward_TokenFailureLogsClassWithoutEndpoint: a token-fetch failure is logged by class (and the
+// status the token service answered with), never with the error text, which names the token endpoint, an
+// internal host (F17). The client sees only the fixed 502 body.
+func TestForward_TokenFailureLogsClassWithoutEndpoint(t *testing.T) {
+	up, _ := recordingUpstream(t, nil)
+
+	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	unavailable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer unavailable.Close()
+	garbage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer garbage.Close()
+
+	for _, tc := range []struct {
+		name      string
+		endpoint  string
+		wantCause string
+		wantExtra string
+	}{
+		{"endpoint unreachable", closedURL + "/token", `"cause":"unreachable"`, ""},
+		{"endpoint answers 503", unavailable.URL + "/token", `"cause":"status"`, `"status":503`},
+		{"endpoint answers garbage", garbage.URL + "/token", `"cause":"malformed"`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := captureLog(t)
+			h := NewHandler(up.URL, token.NewCache(30*time.Second), token.NewFetcher(tc.endpoint, "registry-browser", "s3cret-value"))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil))
+			if rec.Code != http.StatusBadGateway || strings.TrimSpace(rec.Body.String()) != "auth service error" {
+				t.Fatalf("status %d body %q, want 502 auth service error", rec.Code, rec.Body.String())
+			}
+			logged := buf.String()
+			if !strings.Contains(logged, "token fetch error") || !strings.Contains(logged, tc.wantCause) || !strings.Contains(logged, tc.wantExtra) {
+				t.Errorf("log lacks the failure class: %s", logged)
+			}
+			host := strings.TrimPrefix(strings.TrimSuffix(tc.endpoint, "/token"), "http://")
+			for _, leaked := range []string{host, "/token", "service=", "s3cret-value", "Basic "} {
+				if strings.Contains(logged, leaked) || strings.Contains(rec.Body.String(), leaked) {
+					t.Errorf("%q leaked:\nlog: %s\nbody: %s", leaked, logged, rec.Body.String())
+				}
+			}
+		})
 	}
 }

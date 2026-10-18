@@ -49,7 +49,11 @@ For each request the proxy:
    without calling the token service, and concurrent misses share one token request.
 
 Only `GET` and `HEAD` are forwarded; other methods get `405`, and no request body is
-forwarded.
+forwarded. Only the registry's read routes are forwarded (`/v2/`, `/v2/_catalog` and
+`/v2/<name>/{tags/list,manifests/<ref>,blobs/<digest>,referrers/<digest>}`), in canonical form: any
+other path is `404` and a path with an empty, `.` or `..` segment is `400`, both without contacting
+the registry or the token service. `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `Cf-*` (including the
+Cloudflare Access assertion) and cookies are not passed to the registry.
 
 Two properties guarantee joxit never sees a 401:
 
@@ -104,10 +108,24 @@ See [.env.example](.env.example) for a copy-paste template.
 | Endpoint | Description |
 | --- | --- |
 | `GET /healthz` | Liveness/readiness probe (`200 {"status":"ok"}`) |
-| `*` (any other path) | Reverse-proxied to `UPSTREAM_URL` with transparent Bearer auth |
+| `GET`/`HEAD` on a registry read route (`/v2/…`, see above) | Reverse-proxied to `UPSTREAM_URL` with transparent Bearer auth |
+| any other path | `404` (or `400` if not canonical) |
 
 The binary also supports `-healthcheck`, which dials `/healthz` and exits `0`/`1` (used
 by the container `HEALTHCHECK` on Docker/Compose; Kubernetes uses its own probes).
+
+## Secret rotation
+
+The `registry-browser` secret lives in Hydra and in the proxy's Secret `registry-auth-proxy-secret`
+(key `client-secret`, mounted at `CLIENT_SECRET_FILE`). After a rotation the proxy picks the new value up
+without a restart: when the token service refuses the credentials it re-reads the file and, if it changed,
+retries once. The procedure and the compromise steps are in [SECURITY.md](SECURITY.md#client-secret-rotation-and-compromise).
+
+## Notices
+
+The image carries the licence of this service and the notices of what it redistributes (the Go
+standard library, BSD-3-Clause, and the Mozilla CA bundle, MPL-2.0) in
+`/usr/share/doc/registry-auth-proxy/{LICENSE,THIRD_PARTY_LICENSES}`.
 
 ## Verifying published images
 
@@ -117,7 +135,7 @@ Images are multi-arch, carry an SBOM + SLSA provenance, and are signed with keyl
 ```bash
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp 'https://github.com/meddleware-org/registry-auth-proxy/.*' \
+  --certificate-identity-regexp '^https://github\.com/meddleware-org/registry-auth-proxy/\.github/workflows/docker-publish\.yml@refs/tags/v.*$' \
   quay.io/meddleware-org/registry-auth-proxy:<tag>
 
 # Inspect provenance / SBOM attestations:
@@ -134,13 +152,16 @@ go build -o auth-proxy ./cmd/server
 go test -race ./...
 
 # Container image (reproducible; base pinned by digest)
-docker build --build-arg VERSION=v0.1.0 \
-  -t quay.io/meddleware-org/registry-auth-proxy:v0.1.0 .
+docker build --build-arg VERSION=dev -t registry-auth-proxy:dev .
+
+# Check that the image ships its licence notices (also run in CI; CONTAINER_CLI=podman for rootless podman)
+sh scripts/check-image-notices.sh
 ```
 
 ## Contributing / development
 
 See [AGENTS.md](AGENTS.md) for the package layout, request-flow detail, and testing
 recipes, and [CLAUDE.md](CLAUDE.md) for the architectural invariants. CI runs
-`golangci-lint`, `go vet`, race tests, `govulncheck`, and a Trivy filesystem scan; all
+`golangci-lint`, `go vet`, race tests, `govulncheck`, a Trivy filesystem scan and the image
+notices check; all
 must pass before a `v*` tag triggers a signed multi-registry release.

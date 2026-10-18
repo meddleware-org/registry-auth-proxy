@@ -65,23 +65,7 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
-	cache := token.NewCache(cfg.RefreshMargin)
-	fetcher := token.NewFetcher(cfg.TokenEndpoint, cfg.ClientID, cfg.ClientSecret)
-	handler := proxy.NewHandler(cfg.UpstreamURL, cache, fetcher)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", handleHealth)
-	mux.Handle("/", handler)
-
-	srv := &http.Server{
-		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           logRequest(mux),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		// The UI sends short GETs: a 32 KiB header cap is ample (the default is 1 MiB), and there is no
-		// request body to read. No WriteTimeout: blob downloads stream for as long as the client reads.
-		MaxHeaderBytes: 32 << 10,
-	}
+	srv := newServer(net.JoinHostPort("", cfg.Port), logRequest(newMux(cfg)))
 
 	go func() {
 		slog.Info("listening", "addr", srv.Addr, "version", version)
@@ -101,6 +85,41 @@ func main() {
 		slog.Error("shutdown error", "err", err)
 	}
 	slog.Info("shutdown complete")
+}
+
+// newMux wires the proxy: /healthz locally, every other path to the pre-authenticating handler.
+func newMux(cfg *config.Config) *http.ServeMux {
+	cache := token.NewCache(cfg.RefreshMargin)
+	// When the token service refuses the credentials the file is read again, so a rotated Secret takes
+	// effect without a restart (the kubelet updates the mounted file in place).
+	fetcher := token.NewFetcher(cfg.TokenEndpoint, cfg.ClientID, cfg.ClientSecret).
+		WithSecretReload(func() (string, error) { return config.ReadSecret(cfg.SecretFile) })
+	handler := proxy.NewHandler(cfg.UpstreamURL, cache, fetcher)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", handleHealth)
+	mux.Handle("/", handler)
+	return mux
+}
+
+// Server limits. The UI sends short GETs: a 32 KiB header cap is ample (the net/http default is 1 MiB), and
+// there is no request body to read. There is no WriteTimeout: blob downloads stream for as long as the
+// client reads.
+const (
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 120 * time.Second
+	maxHeaderBytes    = 32 << 10
+)
+
+// newServer returns the HTTP server with the proxy's limits applied.
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
 }
 
 // healthCheck dials the local /healthz endpoint. Used by the container HEALTHCHECK.

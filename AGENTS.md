@@ -18,6 +18,7 @@ Browser → joxit nginx → registry-auth-proxy → Distribution registry
 
 Per request:
   0. Method is not GET/HEAD → 405 (nothing else happens). No body is forwarded.
+     Path is not a canonical registry read route → 404 / 400 (no token, no upstream call).
   1. Predict scope from URL path.
   2. Cache hit  → forward with cached Bearer token (no probe).
   3. Cache miss → probe upstream unauthenticated.
@@ -25,7 +26,8 @@ Per request:
                     401     → parse WWW-Authenticate challenge (quote-aware);
                               scope not pull/catalog → 403, no token request;
                               GET token-service /token (Basic auth, one request
-                              shared by concurrent misses),
+                              shared by concurrent misses; on a 401 the secret file is
+                              re-read once and, if changed, the request is retried),
                               cache token under the ISSUED scope only
                               (expiry − refresh margin; 512-entry bound),
                               retry with Bearer token.
@@ -39,21 +41,25 @@ cmd/server/main.go            HTTP server, routing, graceful shutdown, -healthch
 internal/config/config.go     Env config; client secret loaded from CLIENT_SECRET_FILE
 internal/proxy/handler.go     Reverse proxy: method allowlist, probe/retry, hop-by-hop stripping, 401→403 remap
 internal/proxy/challenge.go   Quote-aware Bearer challenge parser; read-only scope filter
-internal/proxy/scope.go       Predict OCI scope string from request URL path
+internal/proxy/scope.go       Route allowlist (`Route`) and OCI scope prediction from the request path
+scripts/                      third-party-licenses.sh (image notices), check-image-notices.sh (CI image job)
 internal/token/cache.go       Thread-safe, bounded per-scope token cache (margin-based expiry)
 internal/token/flight.go      Collapses concurrent token fetches for one scope into one request
 internal/token/fetcher.go     Fetch tokens from the internal token service (Basic auth)
 ```
 
-Tests: `internal/proxy/scope_test.go`, `internal/proxy/handler_test.go`,
-`internal/token/cache_test.go` (all standard-library `testing`, no extra deps).
+Tests (all standard-library `testing`, no extra deps): `internal/proxy/{scope,handler,forwarding,limits}_test.go`
+and `dial_linux_test.go` (route allowlist, field policy, deadlines against stalling local servers),
+`internal/token/{cache,flight,fetcher}_test.go` (incl. secret re-read), `internal/config/config_test.go`,
+`cmd/server/main_test.go` (header cap, wiring, rotation end to end).
 
 ## Endpoints
 
 | Endpoint | Description |
 | --- | --- |
 | `GET /healthz` | Liveness/readiness probe (`200 {"status":"ok"}`) |
-| `*` | Reverse-proxied to `UPSTREAM_URL` with transparent Bearer auth |
+| `/v2/…` read routes | Reverse-proxied to `UPSTREAM_URL` with transparent Bearer auth (see `Route`) |
+| anything else | `404` / `400` |
 
 ## Environment variables
 
@@ -82,7 +88,8 @@ CLIENT_SECRET_FILE=./client-secret \
 ./auth-proxy
 
 # build Docker image
-docker build --build-arg VERSION=v0.1.0 -t quay.io/meddleware-org/registry-auth-proxy:v0.1.0 .
+docker build --build-arg VERSION=dev -t registry-auth-proxy:dev .
+sh scripts/check-image-notices.sh   # CONTAINER_CLI=podman for rootless podman
 ```
 
 ## Testing locally
@@ -106,8 +113,10 @@ same way before any token is requested.
 
 ## Known limitations (intentional)
 
-- **No server read/write timeout.** Only `ReadHeaderTimeout` is set, so large blob
-  downloads can stream without being cut off. The token fetcher has its own 10s timeout.
+- **No server read/write timeout.** `ReadHeaderTimeout` (10 s), `IdleTimeout` (120 s) and a 32 KiB
+  header cap are set, so large blob downloads can stream without being cut off. The upstream has
+  a 5 s dial and 30 s response-header deadline and no total deadline. The token fetcher has its own
+  10s timeout.
 
 ## Invariants
 
@@ -115,7 +124,10 @@ same way before any token is requested.
   is never logged. Bearer tokens are never logged either.
 - Fail **closed**: a token-fetch error returns `502`, never a naked `401` (which would
   trigger joxit's login dialog).
-- Inbound `Authorization` headers are stripped; the proxy owns that header.
+- Inbound `Authorization` headers are stripped; the proxy owns that header. So are cookies,
+  `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop` and `Cf-*`.
+- Only canonical registry read routes are forwarded (`Route`); the path is never rewritten.
+- A token-fetch failure is logged by class, never with the endpoint URL or error text.
 - Hop-by-hop headers (RFC 7230 §6.1) are stripped in both directions.
 - Response bodies are **streamed**, never fully buffered (constant memory for blobs).
 - The proxy is read-only by construction: GET/HEAD only, no request body, and it never

@@ -5,6 +5,52 @@ All notable changes to registry-auth-proxy are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-10-18
+
+### Security
+
+- Only the registry's read routes are forwarded, in canonical form: `/v2/`, `/v2/_catalog` and
+  `/v2/<name>/{tags/list,manifests/<ref>,blobs/<digest>,referrers/<digest>}` with the registry's own
+  name, tag and digest grammars. Any other canonical path is `404`; a path with an empty, `.` or `..`
+  segment or a trailing slash is `400`; both are answered before the token service or the registry is
+  contacted. The path the registry receives is exactly the path that was checked (it was cleaned for
+  scope prediction but forwarded as sent before).
+- `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop` and every `Cf-*` field (including
+  the Cloudflare Access assertion `Cf-Access-Jwt-Assertion`) are no longer forwarded to the registry.
+- A token-fetch failure is logged by class (`timeout`, `canceled`, `unreachable`, `status` with the status
+  code, `malformed`) instead of the error text, which carried the token endpoint URL and so an internal
+  hostname. `token.FetchError` never contains the endpoint or the secret.
+- The image ships licence notices in `/usr/share/doc/registry-auth-proxy/` (`LICENSE`, and
+  `THIRD_PARTY_LICENSES` with the Go standard library licence and the Debian ca-certificates copyright file
+  that carries the Mozilla CA bundle's MPL-2.0 text); the build fails if they cannot be produced.
+
+### Changed
+
+- Client-secret rotation needs no restart: when the token service answers `401`, the proxy re-reads
+  `CLIENT_SECRET_FILE` and, if the value changed, retries the fetch once. An unchanged or unreadable
+  file leaves the request failing closed (`502`). The secret is still read only from the file and is never
+  logged. The rotation and compromise procedure is documented in `SECURITY.md`.
+- `.dockerignore` no longer excludes `LICENSE` (the image ships it) and excludes `docs/`; `.git` is
+  matched as a file or directory.
+
+### Added
+
+- Tests for the limits that were configured but not exercised: the 30 s response-header deadline (stalled
+  upstream, both the probe and the credentialed leg, with the in-flight slot released), the 5 s dial
+  deadline (a local listener whose accept queue is full), no total deadline for a slow body, the in-flight
+  bound following its limit, the 32 KiB request-header cap (`431`) and the server timeouts; plus tests for
+  the route allowlist, the edge-field policy, the token-failure log, secret re-read (including a
+  concurrent rotation and an end-to-end rotation through the wired proxy), and `ReadSecret`.
+- CI job `image` (`scripts/check-image-notices.sh`) builds the image and checks the shipped notices.
+- `SECURITY.md`: forwarding policy, the transport to the token service and registry (plain in-cluster HTTP,
+  no mutual authentication per decision D18, bounded by NetworkPolicy and client-secret authentication on a
+  single node) and the rotation and compromise procedure.
+
+### Fixed
+
+- README `cosign verify` is pinned to the publish workflow (`docker-publish.yml@refs/tags/v*`); the build
+  example no longer names `v0.1.0`.
+
 ## [0.1.6] - 2026-10-09
 
 ### Security

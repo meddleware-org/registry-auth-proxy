@@ -28,8 +28,9 @@
 // proxied response is well-formed for joxit's nginx.
 //
 // The proxy is read-only by construction: only GET and HEAD are forwarded (anything else is 405
-// before any token is requested), no request body is forwarded, and a token is requested only for
-// pull and catalog scopes (see scope.go and challenge.go). A token is cached under exactly the scope
+// before any token is requested), only the registry's canonical read routes are forwarded (anything
+// else is 404 or 400, see Route in scope.go), no request body is forwarded, and a token is requested only
+// for pull and catalog scopes (see scope.go and challenge.go). A token is cached under exactly the scope
 // it was issued for, never under a predicted alias.
 package proxy
 
@@ -76,6 +77,22 @@ const (
 	DefaultMaxInFlight = 64
 )
 
+// limits are the bounds on forwarding. NewHandler uses defaultLimits; the tests build a Handler with
+// short values so the deadlines and the in-flight bound are exercised against stalling local servers.
+type limits struct {
+	dialTimeout           time.Duration
+	responseHeaderTimeout time.Duration
+	maxInFlight           int
+}
+
+func defaultLimits() limits {
+	return limits{
+		dialTimeout:           upstreamDialTimeout,
+		responseHeaderTimeout: upstreamResponseHeaderTimeout,
+		maxInFlight:           DefaultMaxInFlight,
+	}
+}
+
 // responseDropped lists upstream response fields never passed to the UI: the UI is same-origin behind
 // nginx, so an upstream CORS grant would only widen who may read the response, and the registry sets no
 // cookies the UI could use.
@@ -84,6 +101,19 @@ var responseDropped = []string{"Set-Cookie", "Set-Cookie2"}
 // requestDropped lists inbound request fields never passed upstream besides Authorization and the
 // hop-by-hop set: the registry authenticates with the Bearer token only.
 var requestDropped = []string{"Cookie", "Cookie2"}
+
+// forwardingDropped lists fields that describe the client's path to the proxy rather than the request:
+// forwarding headers (a Distribution registry builds absolute Location URLs from X-Forwarded-Host and
+// -Proto) and client-address fields set by an edge. isEdgeField adds the prefixes X-Forwarded-* and Cf-*;
+// the latter includes the Cloudflare Access assertion Cf-Access-Jwt-Assertion, a bearer for the UI
+// application that the registry has no use for.
+var forwardingDropped = []string{"Forwarded", "X-Real-Ip", "True-Client-Ip", "Cdn-Loop"}
+
+// isEdgeField reports whether name is a forwarding or edge-added request field that is not passed upstream.
+func isEdgeField(name string) bool {
+	l := strings.ToLower(name)
+	return strings.HasPrefix(l, "x-forwarded-") || strings.HasPrefix(l, "cf-") || isDropped(name, forwardingDropped)
+}
 
 // Handler is a pre-authenticating reverse proxy. It sits between joxit's nginx
 // and the Distribution registry, transparently handling Bearer token auth so
@@ -108,17 +138,21 @@ type Handler struct {
 // come from the inbound request context, which allows arbitrarily long blob
 // downloads to stream without being cut off.
 func NewHandler(upstreamURL string, cache *token.Cache, fetcher *token.Fetcher) *Handler {
+	return newHandler(upstreamURL, cache, fetcher, defaultLimits())
+}
+
+func newHandler(upstreamURL string, cache *token.Cache, fetcher *token.Fetcher, lim limits) *Handler {
 	u, _ := url.Parse(upstreamURL) // already validated in config.Load
 	return &Handler{
 		upstream: u,
 		cache:    cache,
 		fetcher:  fetcher,
-		inflight: make(chan struct{}, DefaultMaxInFlight),
+		inflight: make(chan struct{}, lim.maxInFlight),
 		client: &http.Client{
 			Transport: &http.Transport{
 				Proxy:                 nil, // the upstream is in-cluster: never through an environment proxy
-				DialContext:           (&net.Dialer{Timeout: upstreamDialTimeout}).DialContext,
-				ResponseHeaderTimeout: upstreamResponseHeaderTimeout,
+				DialContext:           (&net.Dialer{Timeout: lim.dialTimeout}).DialContext,
+				ResponseHeaderTimeout: lim.responseHeaderTimeout,
 				MaxIdleConnsPerHost:   16,
 				IdleConnTimeout:       90 * time.Second,
 			},
@@ -153,6 +187,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Only the registry's read routes are forwarded, and only in canonical form (F18): the path the
+	// registry receives is exactly the path checked here, and the scope predicted from it (the cache key)
+	// is built from the validated repository name.
+	predictedScope, route := Route(r.URL.Path)
+	switch route {
+	case RouteInvalid:
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	case RouteNotFound:
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
 	// Bound the work in flight: a burst past the bound is answered at once instead of queueing sockets.
 	select {
 	case h.inflight <- struct{}{}:
@@ -162,16 +209,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "busy", http.StatusServiceUnavailable)
 		return
 	}
-
-	// Reject parent-directory traversal / out-of-bounds paths outright (defence-in-depth, F2).
-	// joxit is read-only and only ever requests canonical /v2 paths, so a ".." segment is always
-	// malformed; rejecting here keeps the predicted scope (and its cache key) honest.
-	if _, ok := NormalizePath(r.URL.Path); !ok {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-
-	predictedScope := PredictScope(r.URL.Path)
 
 	// Cache hit: inject token and forward directly.
 	if tok, ok := h.cache.Get(predictedScope); ok {
@@ -223,7 +260,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Fail closed: never surface a naked 401 to joxit, which would trigger
 		// its login dialog. 502 signals an internal auth failure instead.
-		slog.Error("token fetch error", "scope", resolvedScope, "err", err)
+		// Logged by class, never the error text: it names the token endpoint (an internal host).
+		attrs := []any{"scope", resolvedScope, "cause", token.FailureClass(err)}
+		if status := token.FailureStatus(err); status != 0 {
+			attrs = append(attrs, "status", status)
+		}
+		slog.Error("token fetch error", attrs...)
 		http.Error(w, "auth service error", http.StatusBadGateway)
 		return
 	}
@@ -294,11 +336,11 @@ func (h *Handler) roundTrip(r *http.Request, bearerToken string) (*http.Response
 		return nil, err
 	}
 
-	// Forward headers except Authorization (we own it), cookies, and hop-by-hop fields: the fixed
-	// RFC 9110 set and every field the client named in Connection (RFC 9110 §7.6.1).
+	// Forward headers except Authorization (we own it), cookies, forwarding and edge fields, and hop-by-hop
+	// fields: the fixed RFC 9110 set and every field the client named in Connection (RFC 9110 §7.6.1).
 	named := connectionNamed(r.Header)
 	for k, vv := range r.Header {
-		if strings.EqualFold(k, "authorization") || isHopByHop(k) || isDropped(k, requestDropped) || named[strings.ToLower(k)] {
+		if strings.EqualFold(k, "authorization") || isHopByHop(k) || isDropped(k, requestDropped) || isEdgeField(k) || named[strings.ToLower(k)] {
 			continue
 		}
 		for _, v := range vv {

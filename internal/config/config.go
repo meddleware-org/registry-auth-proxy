@@ -21,6 +21,9 @@ type Config struct {
 	TokenEndpoint string
 	ClientID      string
 	ClientSecret  string
+	// SecretFile is the path the client secret was read from; the fetcher re-reads it when the token
+	// service refuses the credentials, so a rotated Secret takes effect without a restart.
+	SecretFile    string
 	RefreshMargin time.Duration
 	LogLevel      string
 }
@@ -75,14 +78,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	raw, err := os.ReadFile(secretFile)
+	secret, err := ReadSecret(secretFile)
 	if err != nil {
-		return nil, fmt.Errorf("read CLIENT_SECRET_FILE %q: %w", secretFile, err)
+		return nil, err
 	}
-	cfg.ClientSecret = strings.TrimSpace(string(raw))
-	if cfg.ClientSecret == "" {
-		return nil, fmt.Errorf("CLIENT_SECRET_FILE %q is empty", secretFile)
-	}
+	cfg.ClientSecret = secret
+	cfg.SecretFile = secretFile
 
 	marginStr := envOr("TOKEN_REFRESH_MARGIN", "30s")
 	margin, err := time.ParseDuration(marginStr)
@@ -95,6 +96,21 @@ func Load() (*Config, error) {
 	cfg.UpstreamURL = strings.TrimRight(cfg.UpstreamURL, "/")
 
 	return cfg, nil
+}
+
+// ReadSecret reads the client secret from path: the file content with surrounding whitespace removed, which
+// must not be empty. The secret exists only in this file (a mounted Kubernetes Secret) and in memory; the
+// returned error names the path, never the content.
+func ReadSecret(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read CLIENT_SECRET_FILE %q: %w", path, err)
+	}
+	secret := strings.TrimSpace(string(raw))
+	if secret == "" {
+		return "", fmt.Errorf("CLIENT_SECRET_FILE %q is empty", path)
+	}
+	return secret, nil
 }
 
 // validateHTTPURL rejects a value that is not a well-formed http(s) URL with a host. It does not

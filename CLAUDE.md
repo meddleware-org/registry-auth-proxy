@@ -15,7 +15,10 @@ security-critical in the same way as the token service — it only ever holds th
 
 2. **The client secret lives only in `CLIENT_SECRET_FILE`.** It is never logged,
    never exposed as an environment variable, and never included in error messages.
-   The file is mounted from a Kubernetes Secret (mode 0440).
+   The file is mounted from a Kubernetes Secret (mode 0440). It is read at startup and again,
+   once per fetch, when the token service answers `401` (`Fetcher.WithSecretReload`): a changed
+   value is retried at once, an unchanged or unreadable file leaves the failure closed (502). That
+   makes rotation restart-free; it is not a background watcher (see "What not to do").
 
 3. **Strip inbound Authorization headers.** joxit may send stale credentials from its
    localStorage. Always replace the Authorization header with our own Bearer token;
@@ -32,12 +35,21 @@ security-critical in the same way as the token service — it only ever holds th
    authorized — remap it to 403. Only the unauthenticated probe path may branch on 401
    (to trigger a token fetch); a token-bearing 401 is always remapped.
 
-4. **Read-only, no request bodies.** Only `GET` and `HEAD` are forwarded; every other
+4. **Read-only, no request bodies, read routes only.** Only `GET` and `HEAD` are forwarded; every other
    method is `405` before the upstream or the token service is contacted. No request body
    is read or forwarded (the old 32 MiB replay buffer is gone). A token is requested only
    for `registry:catalog:*` or `repository:<name>:pull`; a challenge for anything else
    (push, delete, `*`, a malformed scope) is answered `403` without a token request.
    Challenge parsing is quote-aware (`challenge.go`).
+
+   **Route allowlist (`scope.go`, `Route`).** Only `/v2/`, `/v2`, `/v2/_catalog` and
+   `/v2/<name>/{tags/list,manifests/<ref>,blobs/<digest>,referrers/<digest>}` are forwarded, with the
+   registry's own name/tag/digest grammars; another canonical path is `404`, a path with an empty, `.` or
+   `..` segment or a trailing slash is `400`, both before any token or upstream call. The path is never
+   rewritten, so the path the registry receives is the path that was checked. `X-Forwarded-*`,
+   `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop` and `Cf-*` (incl. the Access JWT) are not
+   forwarded upstream. A failed token fetch is logged by class (`token.FailureClass`), never with the
+   error text or endpoint.
 
    **A token is cached only under the scope it was issued for** — never under the scope
    predicted from the path — and the cache is bounded (512 entries; expired entries are
@@ -46,7 +58,8 @@ security-critical in the same way as the token service — it only ever holds th
 
    **Limits.** At most 64 forwards are in flight (`DefaultMaxInFlight`; beyond that, 503 with
    `Retry-After`); the upstream connection has a 5 s dial and a 30 s response-header deadline (no total
-   deadline, so blob downloads stream); request headers are capped at 32 KiB. A failed upstream is logged
+   deadline, so blob downloads stream); request headers are capped at 32 KiB (all
+   pinned by tests: `limits_test.go`, `dial_linux_test.go`, `cmd/server/main_test.go`). A failed upstream is logged
    by class (`timeout` / `canceled` / `unreachable`), never with the error text, which carries the
    upstream address.
 
@@ -60,7 +73,9 @@ security-critical in the same way as the token service — it only ever holds th
   structured logging via `log/slog`, graceful shutdown, `envOr` for optional config.
 - Keep `cmd/server/main.go` thin — routing and server setup only.
 - Token cache lives in `internal/token/cache.go`; token fetching in `internal/token/fetcher.go`.
-- Proxy logic (401 intercept, retry, scope prediction) lives in `internal/proxy/`.
+- Proxy logic (401 intercept, retry, route allowlist and scope prediction) lives in `internal/proxy/`.
+- `scripts/third-party-licenses.sh` and `scripts/check-image-notices.sh` produce and check the licence
+  notices shipped in the image (`/usr/share/doc/registry-auth-proxy/`); CI runs the check.
 
 ## What not to do
 
@@ -71,5 +86,8 @@ security-critical in the same way as the token service — it only ever holds th
   mounted as files are the correct pattern for credentials.
 - Do not cache a token under any key but the scope it was issued for, and do not forward a
   request body or a method other than GET/HEAD.
+- Do not watch `CLIENT_SECRET_FILE` with a goroutine or poll it: the re-read on a `401` is the whole
+  mechanism.
+- Do not widen the route allowlist to "everything under /v2" or forward `X-Forwarded-*`/`Cf-*` headers.
 - Do not implement token refresh via background goroutine. The lazy cache-miss approach
   is simpler and correct — the extra latency on cache miss is negligible.

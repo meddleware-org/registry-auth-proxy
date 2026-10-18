@@ -4,8 +4,8 @@ Dockerfile
 .gitignore
 .env*
 .github/
-.git/
-LICENSE
+.git
+docs/
 llms.txt
 client-secret
 *.key

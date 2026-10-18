@@ -28,6 +28,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     -o /out/auth-proxy \
     ./cmd/server
 
+# Licence notices of what the image redistributes besides the service: the Go standard library compiled
+# into the binary (BSD-3-Clause) and the Mozilla CA bundle copied below (MPL-2.0); the build fails if either
+# cannot be produced. The project's own LICENSE (0BSD) is copied beside them.
+RUN mkdir -p /out/doc && sh scripts/third-party-licenses.sh /out/doc/THIRD_PARTY_LICENSES && cp LICENSE /out/doc/LICENSE
+
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 # scratch: zero OS footprint. The binary is fully self-contained.
 FROM scratch
@@ -52,6 +57,8 @@ COPY --from=builder /out/auth-proxy /auth-proxy
 # CA bundle so the proxy can dial HTTPS token endpoints if ever configured;
 # the in-cluster default (plain HTTP ClusterIP) does not require it.
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# Notices: BSD-3-Clause (Go standard library), MPL-2.0 (CA bundle), and the 0BSD licence of this service.
+COPY --from=builder /out/doc/ /usr/share/doc/registry-auth-proxy/
 
 # Non-root nobody: the binary needs no filesystem writes and no privileges.
 USER 65534:65534

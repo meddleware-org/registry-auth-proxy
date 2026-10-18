@@ -15,7 +15,8 @@
 ## Endpoints
 
 - `GET /healthz` — returns `200 {"status":"ok"}`.
-- `*` (any other path) — reverse-proxied to `UPSTREAM_URL` with transparent Bearer auth.
+- `/v2/` read routes (`/v2/_catalog`, `/v2/<name>/{tags/list,manifests/<ref>,blobs/<digest>,referrers/<digest>}`) —
+  reverse-proxied to `UPSTREAM_URL` with transparent Bearer auth; any other path is 404 (400 if not canonical).
 - CLI: `-healthcheck` dials `/healthz` and exits 0/1 (container HEALTHCHECK).
 
 ## Configuration (environment variables)
@@ -30,7 +31,7 @@
 
 ## Request flow
 
-- Predict OCI scope from URL path (catalog / repository:*:pull).
+- Allow only canonical registry read routes; predict the OCI scope from the path (catalog / repository:*:pull).
 - Cache hit → forward with cached token. Miss → probe unauthenticated.
 - Only GET/HEAD are forwarded (else 405); no request body is forwarded.
 - Non-401 → stream back. 401 → parse challenge (quote-aware); a non pull/catalog scope → 403;
@@ -39,9 +40,11 @@
 
 ## Security invariants
 
-- Client secret file-only, never logged; Bearer tokens never logged.
+- Client secret file-only, never logged; Bearer tokens never logged. A 401 from the token service re-reads the
+  file once (restart-free rotation); see SECURITY.md.
 - Fail closed: token-fetch error → 502, never a naked 401.
-- Inbound Authorization headers stripped; hop-by-hop headers stripped both directions.
+- Inbound Authorization headers, cookies, X-Forwarded-*, Forwarded, X-Real-Ip and Cf-* stripped; hop-by-hop headers
+  stripped both directions.
 - Read-only: GET/HEAD only; only pull/catalog scopes predicted or requested; token cache bounded (512) and keyed by issued scope.
 - Response bodies streamed, never fully buffered.
 
@@ -50,6 +53,7 @@
 - Multi-arch images (amd64/arm64) on quay.io + Docker Hub.
 - SBOM (SPDX) + SLSA provenance attached; keyless cosign signatures over the digest.
 - Base image pinned by digest; reproducible build; standard library only (no deps).
+- Licence notices (Go stdlib, CA bundle) ship in /usr/share/doc/registry-auth-proxy/.
 
 ## Links
 

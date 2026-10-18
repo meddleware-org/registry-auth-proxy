@@ -105,6 +105,12 @@ func TestIsHopByHop(t *testing.T) {
 // the given token, and the supplied upstream URL.
 func newTestHandler(t *testing.T, upstreamURL, issueToken string) *Handler {
 	t.Helper()
+	return newTestHandlerLimits(t, upstreamURL, issueToken, defaultLimits())
+}
+
+// newTestHandlerLimits is newTestHandler with explicit limits (short deadlines, a small in-flight bound).
+func newTestHandlerLimits(t *testing.T, upstreamURL, issueToken string, lim limits) *Handler {
+	t.Helper()
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"token":      issueToken,
@@ -116,7 +122,7 @@ func newTestHandler(t *testing.T, upstreamURL, issueToken string) *Handler {
 
 	cache := token.NewCache(30 * time.Second)
 	fetcher := token.NewFetcher(tokenSrv.URL, "registry-browser", "secret")
-	return NewHandler(upstreamURL, cache, fetcher)
+	return newHandler(upstreamURL, cache, fetcher, lim)
 }
 
 // TestServeHTTP_HappyPath verifies the probe → 401 → fetch → retry flow: an
