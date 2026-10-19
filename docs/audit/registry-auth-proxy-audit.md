@@ -1021,7 +1021,7 @@ Each pushed image (quay.io and Docker Hub, multi-arch, signed at the index diges
 cosign signature, an SPDX SBOM attached as a signed attestation (`cosign attest --type spdxjson`) and a
 GitHub build-provenance attestation, plus BuildKit `provenance: mode=max` (`sbom: false` because the
 BuildKit scanner pull is unreliable); none of these steps uses `continue-on-error`. The self-hosted
-registry push (`publish-private`) is a best-effort, unsigned mirror. From 0.1.7 the image also carries
+registry receives the same image by digest (`mirror-private`, best-effort, signature verified on the mirror; no rebuild). From 0.1.7 the image also carries
 its licence notices (F22) and the `verify` job includes the `image` check. The 0.1.6 digest
 `sha256:d98c347c…1581` was the same on quay.io, Docker Hub and in `config/images.yaml`, and was
 cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the deployed one and was cosign-verified on 2026-10-18.
@@ -1405,6 +1405,7 @@ verify` pinned to the workflow, F12).
 - 2026-10-18 — released and deployed (`v0.1.7` = `a3678e4`, `0.1.7@sha256:150382016712b23b60c991996b5b69293b6dde5f481447d4c0574197ef2f097e`), verified live. Cosign keyless signature verified against the workflow-anchored identity (`verify-digests.sh` 16/16); rollout (`kubectl apply -k`, registry overlay) succeeded. On-node route checks after the rollout: allowed routes `200`, write methods `405`, non-routes `404`, non-canonical paths `400` (release facts). Still open and unchanged: F19, F21 (platform), the rotation rehearsal, the credential inventory and the external review.
 - 2026-10-19 — dependency-bot status checked (read-only): `.github/dependabot.yml` carries the `ignore` rules and the repository has no open Dependabot pull requests (`gh pr list`, 2026-10-19). Versions, findings and gates were not re-examined in this pass.
   - Dependabot policy encoded in .github/dependabot.yml (majors declined); open PRs merged 2026-10-19
+  - `docker-publish.yml`: the private rebuild jobs are replaced by one `mirror-private` job that copies the published quay.io image (and its cosign artifacts) to the self-hosted registry by digest and fails unless the digest and the signature match (build once, promote by digest; committed locally, not yet released; the `PRIVATE_REGISTRY_*` credentials are still unset).
 
 ## Pre-save consistency checklist (this pass)
 
