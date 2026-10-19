@@ -1403,6 +1403,8 @@ verify` pinned to the workflow, F12).
     platform.
 
 - 2026-10-18 — released and deployed (`v0.1.7` = `a3678e4`, `0.1.7@sha256:150382016712b23b60c991996b5b69293b6dde5f481447d4c0574197ef2f097e`), verified live. Cosign keyless signature verified against the workflow-anchored identity (`verify-digests.sh` 16/16); rollout (`kubectl apply -k`, registry overlay) succeeded. On-node route checks after the rollout: allowed routes `200`, write methods `405`, non-routes `404`, non-canonical paths `400` (release facts). Still open and unchanged: F19, F21 (platform), the rotation rehearsal, the credential inventory and the external review.
+- 2026-10-19 — dependency-bot status checked (read-only): `.github/dependabot.yml` carries the `ignore` rules and the repository has no open Dependabot pull requests (`gh pr list`, 2026-10-19). Versions, findings and gates were not re-examined in this pass.
+  - Dependabot policy encoded in .github/dependabot.yml (majors declined); open PRs merged 2026-10-19
 
 ## Pre-save consistency checklist (this pass)
 
