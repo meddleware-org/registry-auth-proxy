@@ -41,7 +41,7 @@ origin-lock rows only).
   rollout (`kubectl apply -k`, registry overlay) succeeded. What this audit says about 0.1.7 is live. on-node route checks after the rollout (2026-10-18, from the release facts; run against the in-cluster service, not re-run by this audit pass): allowed routes answered `200`, write methods `405`, non-routes `404` and non-canonical paths `400`, as the route allowlist (F18) specifies. The 0.1.6 digest `sha256:d98c347c…1581` above is the
   superseded 2026-10-09 deployment. `docs/` (this audit) is committed with it.
 
-**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18
+**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18 · image build 2026-10-20 (0.1.8)
 **Reviewer:** Internal review
 **Severity ceiling:** Medium.
 
@@ -158,7 +158,7 @@ subtests). Verified in code and tests:
   redirects not followed, `..` traversal rejected, config URL validation, and spec-conformant token
   expiry (default 60 s; issue time = min(`issued_at`, local clock)).
 
-**Findings after this pass: 22 — 13 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive.**
+**Findings after this pass: 23 — 14 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive.** F23 (2026-10-20, RESOLVED in 0.1.8): the published `linux/arm64` image carried the amd64 binary; the image build no longer uses QEMU.
 Nothing is Medium or higher; every open item is Low or Info and none widens access.
 
 - **F5 corrected (Low, MITIGATED).** The baseline called the plaintext hop to the token service
@@ -902,6 +902,26 @@ MPL-2.0 text are present, every module in the graph is named, and the image `LIC
 repository's); the release workflow's `verify` job runs the same `go-ci.yml`, so the gate covers a tag.
 Checked locally with rootless podman: `image notices OK`.
 
+### F23 — The published `linux/arm64` image carried an x86-64 binary (found 2026-10-20)
+
+**Severity:** Low   **Disposition:** RESOLVED (0.1.8, commit pending)
+**Where:** `Dockerfile` (`ARG TARGETARCH=amd64`, the `go build` line); `.github/workflows/docker-publish.yml` (QEMU)
+**Issue:** the builder declared `ARG TARGETOS=linux` and `ARG TARGETARCH=amd64` and compiled with
+`GOARCH=${TARGETARCH}`. The default overrode the platform value BuildKit would have supplied, so the arm64 half of the
+multi-arch release (built under QEMU) compiled `GOARCH=amd64` too. Found 2026-10-20 while moving the build off QEMU:
+the `linux/arm64` image of the published 0.1.7 (`sha256:15038201…097e`) holds `/auth-proxy` with the same SHA-256 as the
+amd64 image (`9dd2208c…`, ELF x86-64).
+**Impact:** the `linux/arm64` image would fail with an exec format error on an arm64 node. The cluster is amd64, so
+nothing deployed was affected; the signature, SBOM and scan all verified, because none of them runs the binary.
+**Remediation / evidence:** 0.1.8: the builder is `FROM --platform=$BUILDPLATFORM` and cross-compiles; `TARGETOS` and
+`TARGETARCH` have no default and the `RUN` aborts if either is empty; a build step asserts with `go version -m`
+(reads the binary without running it) that its `GOARCH` equals `${TARGETARCH}`, so a mismatched architecture fails the
+build on every platform (checked by hard-coding `GOARCH=amd64` and building `linux/arm64`: `is not built for arm64`);
+`setup-qemu-action` is removed from the release. Proof (rootless podman, no binfmt handler registered, so emulation was
+impossible): the amd64 image built from the 0.1.7 sources with `VERSION=v0.1.7` is byte-identical to the published
+amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11…`; `go version -m`: `GOARCH=arm64`,
+`GOOS=linux`, `CGO_ENABLED=0`, `-trimpath=true`) and the rest of its tree equals the published one.
+
 ---
 
 ## Section A — Invariant verification matrix
@@ -953,6 +973,7 @@ Checked locally with rootless podman: `image notices OK`.
 | IMG | Build context | HOLDS — `.dockerignore` excludes `.git`, `docs/`, `.env*`, `client-secret`, `*.key`, `*.pem` |
 | IMG | Reproducible build stage | HOLDS — `go.mod` only, no dependency to resolve; only the binary and the CA bundle reach the runtime stage |
 | IMG | No secrets in layers | HOLDS — build args are OCI label strings |
+| IMG | Build host and emulation | HOLDS (0.1.8, F23) — the builder stage is `FROM --platform=$BUILDPLATFORM` and cross-compiles with `GOOS=$TARGETOS GOARCH=$TARGETARCH` (no default for either; the `RUN` aborts if one is empty; a `go version -m` step asserts the binary's `GOARCH` equals the target); `docker-publish.yml` has no `docker/setup-qemu-action` step, so no privileged binfmt step runs in the release; rootless podman build of both platforms with no binfmt handler: the amd64 image equals the published 0.1.7 in every file, the arm64 image holds an ELF aarch64 binary |
 | IMG | Runtime user & filesystem | HOLDS — `USER 65534:65534`; pod: `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, all capabilities dropped, `RuntimeDefault` seccomp, `automountServiceAccountToken: false` |
 | IMG | Runtime configuration | HOLDS — the image sets only `PORT`; the manifest sets `UPSTREAM_URL`, `TOKEN_ENDPOINT`, `CLIENT_ID`, `CLIENT_SECRET_FILE`, `TOKEN_REFRESH_MARGIN`, `LOG_LEVEL` |
 | IMG | Health & resources | HOLDS — readiness and liveness on `/healthz`; requests 20m/32Mi, limits 200m/128Mi |
@@ -1123,6 +1144,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 ### pre-mainnet (production)
 
 - [x] bounded cache + single-flight (F3, 0.1.4)
+- [x] each published platform's image holds that platform's binary, and the release builds without emulation — F23 (0.1.8: `FROM --platform=$BUILDPLATFORM`, no `TARGETARCH` default, the `go version -m` build step; commit pending)
 - [x] release gate = CI gates; toolchain aligned; image scan before signing (F9, 0.1.4–0.1.5)
 - [x] SBOM, signing and provenance in place
 - [x] SIGTERM drains in-flight requests; health endpoint reveals nothing (`main.go:78-87`, `/healthz`)
@@ -1407,6 +1429,8 @@ verify` pinned to the workflow, F12).
   - Dependabot policy encoded in .github/dependabot.yml (majors declined); open PRs merged 2026-10-19
   - `docker-publish.yml`: the private rebuild jobs are replaced by one `mirror-private` job that copies the published quay.io image (and its cosign artifacts) to the self-hosted registry by digest and fails unless the digest and the signature match (build once, promote by digest; committed locally, not yet released; the `PRIVATE_REGISTRY_*` credentials are still unset).
 
+- 2026-10-20 — image build moved off QEMU in 0.1.8 (commit pending): the builder stage is `FROM --platform=$BUILDPLATFORM` and cross-compiles with `GOOS=$TARGETOS GOARCH=$TARGETARCH` (no default for either; the `RUN` aborts if one is empty; a `go version -m` step asserts the binary's `GOARCH` equals the target); `docker-publish.yml` has no `docker/setup-qemu-action` step, so no privileged binfmt step runs in the release. Proof with rootless podman (builder pinned by digest, no binfmt handler registered): the amd64 image built from the 0.1.7 sources equals the published 0.1.7 in every file; the arm64 image differs by design (F23). New: F23 RESOLVED (the published arm64 image held an x86-64 binary; the cluster is amd64, so nothing deployed was affected). Checks: `go vet`, `go test -race` on go1.26.9, `scripts/check-image-notices.sh` with podman where the repo has it. No other disposition changed.
+
 ## Pre-save consistency checklist (this pass)
 
 - [x] Section A ↔ findings: every row HOLDS (2026-10-18: I10, I20, I21 now cite F18, F20, F17 as resolved;
@@ -1414,8 +1438,8 @@ verify` pinned to the workflow, F12).
 - [x] Finding header ↔ body: consistent (original 2026-10-03 text kept as history under each header, the
   remediation paragraph states what was done).
 - [x] Template line: base + GO + IMG + AUTH + PROXY at the registry dates (2026-10-08); untriggered lenses named.
-- [x] Corpus IDs preserved (F1–F13, OQ1–OQ6); new IDs F14–F22 / OQ7 (no new finding in the 2026-10-18 pass).
+- [x] Corpus IDs preserved (F1–F13, OQ1–OQ6); new IDs F14–F23 / OQ7 (F23 found 2026-10-20).
 - [x] Section D ↔ dispositions (unticked items name their gate: pre-mainnet or maintainer).
-- [x] Executive summary ↔ dispositions and ceiling (Medium; realised Low): 13 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive = 22.
+- [x] Executive summary ↔ dispositions and ceiling (Medium; realised Low): 14 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive = 23.
 - [x] C.1 counts measured 2026-10-18 (0.1.7 tree).
-- [x] Re-verification log entry added.
+- [x] Re-verification log entry added (2026-10-20: F23).

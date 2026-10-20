@@ -158,6 +158,10 @@ docker build --build-arg VERSION=dev -t registry-auth-proxy:dev .
 sh scripts/check-image-notices.sh
 ```
 
+The builder stage runs on the build host and cross-compiles for `--platform`, so a multi-platform build needs no
+QEMU emulation. It reads `TARGETOS`/`TARGETARCH` from BuildKit (the default `docker build` and `buildx`) or podman and
+fails if they are empty (the legacy builder does not set them).
+
 ## Contributing / development
 
 See [AGENTS.md](AGENTS.md) for the package layout, request-flow detail, and testing
