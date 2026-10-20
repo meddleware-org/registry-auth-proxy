@@ -904,7 +904,7 @@ Checked locally with rootless podman: `image notices OK`.
 
 ### F23 — The published `linux/arm64` image carried an x86-64 binary (found 2026-10-20)
 
-**Severity:** Low   **Disposition:** RESOLVED (0.1.8, commit pending)
+**Severity:** Low   **Disposition:** RESOLVED (0.1.8, commit 5a1bd7e)
 **Where:** `Dockerfile` (`ARG TARGETARCH=amd64`, the `go build` line); `.github/workflows/docker-publish.yml` (QEMU)
 **Issue:** the builder declared `ARG TARGETOS=linux` and `ARG TARGETARCH=amd64` and compiled with
 `GOARCH=${TARGETARCH}`. The default overrode the platform value BuildKit would have supplied, so the arm64 half of the
@@ -1144,7 +1144,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 ### pre-mainnet (production)
 
 - [x] bounded cache + single-flight (F3, 0.1.4)
-- [x] each published platform's image holds that platform's binary, and the release builds without emulation — F23 (0.1.8: `FROM --platform=$BUILDPLATFORM`, no `TARGETARCH` default, the `go version -m` build step; commit pending)
+- [x] each published platform's image holds that platform's binary, and the release builds without emulation — F23 (0.1.8: `FROM --platform=$BUILDPLATFORM`, no `TARGETARCH` default, the `go version -m` build step; commit 5a1bd7e)
 - [x] release gate = CI gates; toolchain aligned; image scan before signing (F9, 0.1.4–0.1.5)
 - [x] SBOM, signing and provenance in place
 - [x] SIGTERM drains in-flight requests; health endpoint reveals nothing (`main.go:78-87`, `/healthz`)
@@ -1429,7 +1429,7 @@ verify` pinned to the workflow, F12).
   - Dependabot policy encoded in .github/dependabot.yml (majors declined); open PRs merged 2026-10-19
   - `docker-publish.yml`: the private rebuild jobs are replaced by one `mirror-private` job that copies the published quay.io image (and its cosign artifacts) to the self-hosted registry by digest and fails unless the digest and the signature match (build once, promote by digest; committed locally, not yet released; the `PRIVATE_REGISTRY_*` credentials are still unset).
 
-- 2026-10-20 — image build moved off QEMU in 0.1.8 (commit pending): the builder stage is `FROM --platform=$BUILDPLATFORM` and cross-compiles with `GOOS=$TARGETOS GOARCH=$TARGETARCH` (no default for either; the `RUN` aborts if one is empty; a `go version -m` step asserts the binary's `GOARCH` equals the target); `docker-publish.yml` has no `docker/setup-qemu-action` step, so no privileged binfmt step runs in the release. Proof with rootless podman (builder pinned by digest, no binfmt handler registered): the amd64 image built from the 0.1.7 sources equals the published 0.1.7 in every file; the arm64 image differs by design (F23). New: F23 RESOLVED (the published arm64 image held an x86-64 binary; the cluster is amd64, so nothing deployed was affected). Checks: `go vet`, `go test -race` on go1.26.9, `scripts/check-image-notices.sh` with podman where the repo has it. No other disposition changed.
+- 2026-10-20 — image build moved off QEMU in 0.1.8 (commit 5a1bd7e): the builder stage is `FROM --platform=$BUILDPLATFORM` and cross-compiles with `GOOS=$TARGETOS GOARCH=$TARGETARCH` (no default for either; the `RUN` aborts if one is empty; a `go version -m` step asserts the binary's `GOARCH` equals the target); `docker-publish.yml` has no `docker/setup-qemu-action` step, so no privileged binfmt step runs in the release. Proof with rootless podman (builder pinned by digest, no binfmt handler registered): the amd64 image built from the 0.1.7 sources equals the published 0.1.7 in every file; the arm64 image differs by design (F23). New: F23 RESOLVED (the published arm64 image held an x86-64 binary; the cluster is amd64, so nothing deployed was affected). Checks: `go vet`, `go test -race` on go1.26.9, `scripts/check-image-notices.sh` with podman where the repo has it. No other disposition changed.
 
 ## Pre-save consistency checklist (this pass)
 
