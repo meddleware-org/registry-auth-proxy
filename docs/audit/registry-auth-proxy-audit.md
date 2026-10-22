@@ -164,7 +164,7 @@ subtests). Verified in code and tests:
   redirects not followed, `..` traversal rejected, config URL validation, and spec-conformant token
   expiry (default 60 s; issue time = min(`issued_at`, local clock)).
 
-**Findings after this pass: 24 — 17 RESOLVED, 5 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive.** F23 (2026-10-20, RESOLVED in 0.1.8): the published `linux/arm64` image carried the amd64 binary; the image build no longer uses QEMU. F24 (2026-10-22, RESOLVED in 0.1.9, commit pending): `govulncheck` reported a reachable Go standard-library advisory on 1.26.9; the toolchain and the builder moved to 1.26.10.
+**Findings after this pass: 24 — 17 RESOLVED, 5 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive.** F23 (2026-10-20, RESOLVED in 0.1.8): the published `linux/arm64` image carried the amd64 binary; the image build no longer uses QEMU. F24 (2026-10-22, RESOLVED in 0.1.9, commit 81fa387): `govulncheck` reported a reachable Go standard-library advisory on 1.26.9; the toolchain and the builder moved to 1.26.10.
 Nothing is Medium or higher; every open item is Low or Info and none widens access.
 
 - **F5 corrected (Low, MITIGATED; decided 2026-10-22: accepted, revisit at the second node).** The baseline called the plaintext hop to the token service
@@ -1062,7 +1062,7 @@ amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11
 
 ### F24 — The Go 1.26.9 standard library carries a reachable advisory, GO-2026-6809 (found 2026-10-22)
 
-**Severity:** Low   **Disposition:** RESOLVED (0.1.9, commit pending; not yet released or deployed)
+**Severity:** Low   **Disposition:** RESOLVED (0.1.9, commit 81fa387; not yet released or deployed)
 **Where:** `go.mod` (`toolchain go1.26.9`), `Dockerfile` (builder `golang:1.26.9-bookworm`).
 **Issue:** `govulncheck` v1.8.0 on the 0.1.8 tree reports GO-2026-6809 ("distrust compromised intermediate
 certificates in `crypto/x509`", fixed in go1.26.10) as reachable (trace: `Handler.ServeHTTP` → `io.Copy` →
@@ -1313,7 +1313,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 - [ ] key rotation with overlap rehearsed; compromise procedure documented for the `registry-browser` secret (F10) — the compromise procedure is documented (`SECURITY.md`, 0.1.7) and rotation is restart-free (`TestSecretRotationWithoutRestart`); the rehearsal against the live cluster, a cadence and a last-rotation record are maintainer tasks
 - [x] the negative origin check runs on a schedule (F19) — authored 2026-10-22, applied: see log: hourly CronJobs `origin-lock-probe` in `registry` (`:23`) and `origin-lock-test` (`:41`); a failure is a failed Job and `kube_job_status_failed` (status-page wiring is a follow-up, OQ9)
 - [x] deadline and header-cap tests (F20) — `limits_test.go`, `dial_linux_test.go`, `cmd/server/main_test.go`; 0.1.7, commit `de46a96`
-- [x] standard library free of known reachable advisories at release (F24) — govulncheck `No vulnerabilities found` on go1.26.10 (0.1.9, commit pending); the 0.1.9 release is the orchestrator's
+- [x] standard library free of known reachable advisories at release (F24) — govulncheck `No vulnerabilities found` on go1.26.10 (0.1.9, commit 81fa387); the 0.1.9 release is the orchestrator's
 - [x] limits sized for the plan tier and measured under load (F20 remainder) — measured 2026-10-22 (`internal/loadtest`, numbers in F20); resources resized to 20m/16Mi and 200m/64Mi, authored, applied: see log; nginx limit unchanged, Cloudflare free-plan arithmetic recorded
 - [ ] registry credential inventory (scope, holder, rotation date) — maintainer, `OPERATOR_TASKS.md` "Image registry credentials", deferred to launch
 - [ ] external review of the forwarding path — awaiting external review
@@ -1627,7 +1627,7 @@ verify` pinned to the workflow, F12).
     `config/images.yaml`).
   - **Done in this repository:** `internal/loadtest` harness (build tag `load`) and its numbers (F20);
     `TestWiredDeleteIsRefused` (F8, OQ6); **F24** found and RESOLVED (`govulncheck`: GO-2026-6809 on go1.26.9;
-    toolchain and builder to 1.26.10, 0.1.9, commit pending); SECURITY.md NetworkPolicy text and AGENTS.md updated.
+    toolchain and builder to 1.26.10, 0.1.9, commit 81fa387); SECURITY.md NetworkPolicy text and AGENTS.md updated.
   - **Decided (recorded, no code):** OQ2 and S3 (no negative cache), F3 residual accepted, F5 accepted until a
     second node, F11 multiple-scope by design (F11 now RESOLVED), OQ1, OQ6, OQ7. New open questions: OQ8 (host
     identity), OQ9 (surfacing the probe verdict). F12 RESOLVED (base tag).
