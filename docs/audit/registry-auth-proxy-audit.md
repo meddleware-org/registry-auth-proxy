@@ -44,8 +44,7 @@ origin-lock rows only).
   2026-10-22; the cluster apply of it is not re-checked by this pass). The manifests in `k8s/` were changed
   (NetworkPolicy, origin-lock CronJobs, Hydra client scope, registry-ui deletion toggle, container resources)
   and are **authored, rendered with `kubectl kustomize`, and not applied**: every "applied: see log" below is
-  filled in by the cluster apply. 0.1.9 (Go 1.26.10, F24; test and tooling additions) is a local commit, not yet
-  tagged or released.
+  filled in by the cluster apply. 0.1.9 (Go 1.26.10, F24; test and tooling additions) was a local commit at that pass; **it is released as `v0.1.9` (2026-10-22, `c54e6d5`; `Publish (Docker)` run 39764223799 succeeded) and pinned in `config/images.yaml` (`0.1.9@sha256:7dbf5093…3cd5`)**; the cluster apply of it is not re-checked by this audit.
 
 **Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18 · image build 2026-10-20 (0.1.8) · platform, load and toolchain pass 2026-10-22 (0.1.9)
 **Reviewer:** Internal review
@@ -667,8 +666,7 @@ repository; the base Deployment manifest tag, in `k8s/`, was brought in line 202
   - `docs/` (this audit) is committed with the release commit.
 - **Closed 2026-10-22 (the platform item):** `k8s/base/registry/auth-proxy/deployment.yaml` had drifted to tag
   `0.1.7` (the audit text said `0.1.1`); the cluster overlay always replaced it with the pinned digest, so the
-  cluster was correct. The base tag now equals the tag in `config/images.yaml` (`0.1.8`; the token-service base
-  tag moved the same way), and the rendered image refs are unchanged (digest-only).
+  cluster was correct. The base tag now equals the tag in `config/images.yaml` (`0.1.8` then; `0.1.9` since 2026-10-22, when both registry base manifests, `k8s/base/registry/auth-proxy` and `k8s/base/registry/token-service`, were advanced again after 0.1.8 had drifted), and the rendered image refs are unchanged (digest-only).
 
 ### F13 — Positive: credential handling and fail-closed behaviour are implemented and tested
 
@@ -1062,7 +1060,7 @@ amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11
 
 ### F24 — The Go 1.26.9 standard library carries a reachable advisory, GO-2026-6809 (found 2026-10-22)
 
-**Severity:** Low   **Disposition:** RESOLVED (0.1.9, commit 81fa387; not yet released or deployed)
+**Severity:** Low   **Disposition:** RESOLVED (0.1.9, commit 81fa387; released as `v0.1.9` = `c54e6d5` on 2026-10-22, publish run 39764223799 succeeded; pinned in `config/images.yaml`; the cluster apply is not re-checked here)
 **Where:** `go.mod` (`toolchain go1.26.9`), `Dockerfile` (builder `golang:1.26.9-bookworm`).
 **Issue:** `govulncheck` v1.8.0 on the 0.1.8 tree reports GO-2026-6809 ("distrust compromised intermediate
 certificates in `crypto/x509`", fixed in go1.26.10) as reachable (trace: `Handler.ServeHTTP` → `io.Copy` →
@@ -1075,8 +1073,7 @@ hops are plain in-cluster `http`, so the vulnerable path is not exercised in the
 govulncheck `No vulnerabilities found`, the full suite on 1.26.10, and the Dockerfile's builder-equals-toolchain
 guard passes in a rootless podman build (`scripts/check-image-notices.sh`: `image notices OK`). No source
 change; the digest of the published 0.1.9 image replaces 0.1.8 in `config/images.yaml` when the orchestrator
-releases it. Other Go services built on 1.26.9 (platform-probe, registry-token-service, static-server) are
-likely to be flagged the same way; not checked here.
+releases it. Other Go services built on 1.26.9 were flagged the same way, by Trivy's image scan rather than govulncheck (the stdlib version is embedded in the binary): static-server 0.1.11, platform-probe 0.1.9 and registry-token-service 0.1.9 moved to Go 1.26.10 on 2026-10-22 (their audits).
 
 ---
 
@@ -1642,6 +1639,10 @@ verify` pinned to the workflow, F12).
     Hydra re-run; the status-page wiring (OQ9); the rotation rehearsal and the credential inventory (maintainer);
     external review. Other Go services pinned to go1.26.9 are probably affected by F24 and were not checked.
 
+- 2026-10-22 (audit close-out) — release status; verified, no repository change.
+  - `v0.1.9` = `c54e6d5` is released (publish run 39764223799 succeeded) and pinned in `config/images.yaml` (`0.1.9@sha256:7dbf5093…3cd5`); F24 (Go 1.26.10, GO-2026-6809) is therefore shipped, not a local commit. The F24 text and the 2026-10-22 status bullet were corrected; the sentence "other Go services ... not checked" is replaced by the confirmation that static-server 0.1.11, platform-probe 0.1.9 and registry-token-service 0.1.9 took the same bump (the image scan flags the embedded stdlib version).
+  - F12 platform item: the workspace base manifests (`k8s/base/registry/{auth-proxy,token-service}/deployment.yaml`) had drifted to `0.1.8` again; both now read `0.1.9`, the `config/images.yaml` tag. No finding or count changes (17 RESOLVED, 5 MITIGATED, 2 Positive).
+
 ## Pre-save consistency checklist (this pass)
 
 - [x] Section A ↔ findings: every row HOLDS (2026-10-18: I10, I20, I21 now cite F18, F20, F17 as resolved;
@@ -1654,3 +1655,4 @@ verify` pinned to the workflow, F12).
 - [x] Executive summary ↔ dispositions and ceiling (Medium; realised Low): 17 RESOLVED, 5 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive = 24.
 - [x] C.1 counts measured 2026-10-22 (0.1.9 tree).
 - [x] Re-verification log entry added (2026-10-22: platform, load and toolchain pass; F24).
+- [x] 2026-10-22 (close-out): F24 and the Deployment status say released; F12 base tag text current; log entry added; counts unchanged.
