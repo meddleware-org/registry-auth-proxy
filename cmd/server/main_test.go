@@ -226,3 +226,74 @@ func TestWiredRoutePolicy(t *testing.T) {
 		t.Errorf("an allowed route: status %d, hits %d; want 200 through the registry", resp.StatusCode, hits.Load())
 	}
 }
+
+// TestWiredDeleteIsRefused pins the answer the registry UI gets when image deletion is attempted through
+// the wired server (audit F8, OQ6): joxit's delete action sends DELETE /v2/<name>/manifests/<digest>
+// (after a HEAD for the digest), and every such request is 405 with Allow: GET, HEAD, before the
+// registry or the token service is contacted, with or without a stale credential in the request.
+func TestWiredDeleteIsRefused(t *testing.T) {
+	var registryHits, tokenHits atomic.Int32
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		registryHits.Add(1)
+		w.Header().Set("Docker-Content-Digest", "sha256:"+strings.Repeat("a", 64))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer registry.Close()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		tokenHits.Add(1)
+		_, _ = w.Write([]byte(`{"token":"t","expires_in":300}`))
+	}))
+	defer tokenSrv.Close()
+
+	secretFile := filepath.Join(t.TempDir(), "client-secret")
+	if err := os.WriteFile(secretFile, []byte("s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UPSTREAM_URL", registry.URL)
+	t.Setenv("TOKEN_ENDPOINT", tokenSrv.URL+"/token")
+	t.Setenv("CLIENT_SECRET_FILE", secretFile)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := serveOn(t, newServer("", newMux(cfg)))
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	for _, path := range []string{
+		"/v2/app/manifests/" + digest, // what joxit sends after resolving the tag's digest
+		"/v2/org/app/manifests/latest",
+		"/v2/app/blobs/" + digest,
+		"/v2/_catalog",
+	} {
+		for _, auth := range []string{"", "Bearer stale-token-from-local-storage"} {
+			req, err := http.NewRequest(http.MethodDelete, base+path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if auth != "" {
+				req.Header.Set("Authorization", auth)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusMethodNotAllowed || resp.Header.Get("Allow") != "GET, HEAD" {
+				t.Errorf("DELETE %s (auth %q): status %d, Allow %q; want 405 with Allow: GET, HEAD", path, auth, resp.StatusCode, resp.Header.Get("Allow"))
+			}
+		}
+	}
+	if registryHits.Load() != 0 || tokenHits.Load() != 0 {
+		t.Errorf("a DELETE reached the registry (%d) or the token service (%d); want neither", registryHits.Load(), tokenHits.Load())
+	}
+
+	// The HEAD that precedes a UI delete is a read and is still forwarded.
+	resp, err := http.Head(base + "/v2/app/manifests/latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || registryHits.Load() == 0 {
+		t.Errorf("HEAD manifest: status %d, registry hits %d; want 200 through the registry", resp.StatusCode, registryHits.Load())
+	}
+}

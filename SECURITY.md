@@ -89,11 +89,15 @@ Basic-auth client secret and the issued Bearer tokens therefore cross the pod ne
 controls that bound it are:
 
 - **NetworkPolicy.** The `registry` namespace runs default-deny ingress
-  (`k8s/base/registry/networkpolicy.yaml`, enforced by Cilium); `allow-registry-ingress` admits the
-  `nginx-ingress`, `monitoring` and `registry` namespaces and, on `8181`/`8080`, the `platform-probe`
-  pod only. That is whole namespaces, not single pods: any pod in an admitted namespace can reach
-  the proxy, which confers the read-only `registry-browser` identity to any caller by design. There is
-  no Ingress for the proxy; the human door is `registry-ui`, behind Cloudflare Access.
+  (`k8s/base/registry/networkpolicy.yaml`, enforced by Cilium). The namespace-wide admission
+  (`allow-registry-ingress`) excludes the proxy; `allow-auth-proxy-ingress` admits exactly two pods to
+  `8181`: the `registry-ui` pod (a `namespaceSelector` and a `podSelector` in one peer) and the
+  `platform-probe` pod. No other pod in any namespace, the ingress controller included, can reach the
+  proxy by pod network, which matters because it confers the read-only `registry-browser` identity to any
+  caller by design. A scheduled job checks from an unlisted pod that the connection is dropped
+  (`k8s/base/registry/origin-lock`). Node-level processes and `hostNetwork` pods share Cilium's `host`
+  identity and are not constrained by pod selectors. There is no Ingress for the proxy; the human door is
+  `registry-ui`, behind Cloudflare Access.
 - **Client-secret authentication at the token service.** Hydra accepts the exchange only with a
   valid client secret, and the token service grants only what Keto allows `registry-browser`
   (pull on the organisation's repositories and the catalog). The proxy additionally requests only

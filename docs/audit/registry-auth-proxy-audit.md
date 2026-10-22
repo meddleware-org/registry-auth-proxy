@@ -40,8 +40,14 @@ origin-lock rows only).
   workflow-anchored identity (`docker-publish.yml@refs/tags/v*`, `verify-digests.sh`, 16/16 valid) and the
   rollout (`kubectl apply -k`, registry overlay) succeeded. What this audit says about 0.1.7 is live. on-node route checks after the rollout (2026-10-18, from the release facts; run against the in-cluster service, not re-run by this audit pass): allowed routes answered `200`, write methods `405`, non-routes `404` and non-canonical paths `400`, as the route allowlist (F18) specifies. The 0.1.6 digest `sha256:d98c347c…1581` above is the
   superseded 2026-10-09 deployment. `docs/` (this audit) is committed with it.
+- Platform, load and toolchain pass 2026-10-22: `config/images.yaml` pins 0.1.8 (`sha256:13603b8a…2ca5`, read
+  2026-10-22; the cluster apply of it is not re-checked by this pass). The manifests in `k8s/` were changed
+  (NetworkPolicy, origin-lock CronJobs, Hydra client scope, registry-ui deletion toggle, container resources)
+  and are **authored, rendered with `kubectl kustomize`, and not applied**: every "applied: see log" below is
+  filled in by the cluster apply. 0.1.9 (Go 1.26.10, F24; test and tooling additions) is a local commit, not yet
+  tagged or released.
 
-**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18 · image build 2026-10-20 (0.1.8)
+**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18 · image build 2026-10-20 (0.1.8) · platform, load and toolchain pass 2026-10-22 (0.1.9)
 **Reviewer:** Internal review
 **Severity ceiling:** Medium.
 
@@ -52,7 +58,7 @@ origin-lock rows only).
   proxy *requests*. It cannot exceed what Keto grants the identity.
 - Realised ceiling at this pass: **Low** (every open item is Low or Info and none widens access).
 
-**Status:** re-verified 2026-10-09; fix wave 2026-10-18 (0.1.7, released and deployed 2026-10-18; signature verified, rollout succeeded, route checks passed).
+**Status:** re-verified 2026-10-09; fix wave 2026-10-18 (0.1.7, released and deployed 2026-10-18; signature verified, rollout succeeded, route checks passed); platform, load and toolchain pass 2026-10-22 (manifests authored, not yet applied; 0.1.9 committed locally, not yet released).
 
 - The baseline was supplied to this review; this file is committed with the 0.1.7 fix wave (F12).
 - **Corpus IDs F1–F13 are preserved.** New findings start at F14.
@@ -64,7 +70,7 @@ origin-lock rows only).
 
 | Field | Value |
 | --- | --- |
-| Go | `go 1.26.6` with `toolchain go1.26.9` (go.mod); CI `go-version-file: go.mod`; image builder `golang:1.26.9-bookworm@sha256:d9c68c2c…641453c`, and the Dockerfile fails the build when the builder's `go version` differs from the `go.mod` toolchain |
+| Go | `go 1.26.6` with `toolchain go1.26.10` (go.mod, 0.1.9; 0.1.8 and earlier: go1.26.9); CI `go-version-file: go.mod`; image builder `golang:1.26.10-bookworm@sha256:632dff73…a21af` (0.1.9; 0.1.8: `golang:1.26.9-bookworm@sha256:d9c68c2c…641453c`), and the Dockerfile fails the build when the builder's `go version` differs from the `go.mod` toolchain |
 | Modules | none (stdlib only, no `go.sum`) |
 | Entry points | `/auth-proxy` (`cmd/server`), listen `:$PORT` (default 8181); `-healthcheck` mode |
 | Upstreams | `UPSTREAM_URL` (the Distribution registry, in-cluster http; Bearer injected); `TOKEN_ENDPOINT` (registry-token-service `GET /token`, in-cluster http; Basic auth with the client secret) |
@@ -74,7 +80,7 @@ origin-lock rows only).
 | Field | Value |
 | --- | --- |
 | Images | `quay.io/meddleware-org/registry-auth-proxy:0.1.7@sha256:150382016712b23b60c991996b5b69293b6dde5f481447d4c0574197ef2f097e`; `docker.io/meddleware/registry-auth-proxy:0.1.7` (same digest; cosign-verified 2026-10-18; superseded 0.1.6 was `sha256:d98c347c…1581`); best-effort mirror on the self-hosted registry |
-| Base images | builder `golang:1.26.9-bookworm@sha256:d9c68c2c…641453c`; runtime `scratch` (+ the CA bundle copied from the builder) |
+| Base images | builder `golang:1.26.10-bookworm@sha256:632dff73…a21af` (0.1.9; 0.1.8: `golang:1.26.9-bookworm@sha256:d9c68c2c…641453c`); runtime `scratch` (+ the CA bundle copied from the builder) |
 | Runtime user | `65534:65534` (`USER` in the image; pod `runAsNonRoot`) |
 | Runtime FS | read-only root; no writable mount; the secret mounted read-only at `/etc/registry-auth-proxy` (`CLIENT_SECRET_FILE`) |
 | Deployed by | `k8s/base/registry/auth-proxy`, through the `k8s/clusters/meddleware-org/registry` overlay (digest stamped from `config/images.yaml`) |
@@ -94,7 +100,7 @@ origin-lock rows only).
 
 | Field | Value |
 | --- | --- |
-| Upstreams | one origin, `UPSTREAM_URL` (`http://registry.registry.svc.cluster.local:5000`), set in the manifest and validated at startup (F1); the registry authenticates every request itself (Bearer), so there is no origin lock to enforce (F19) |
+| Upstreams | one origin, `UPSTREAM_URL` (`http://registry.registry.svc.cluster.local:5000`), set in the manifest and validated at startup (F1); the registry authenticates every request itself (Bearer), so there is no origin lock to enforce for it; the proxy's own door is locked by pod-level NetworkPolicy and checked on a schedule (F19, authored 2026-10-22) |
 | Public paths | the registry read routes only (`/v2/`, `/v2/_catalog`, `/v2/<name>/{tags/list,manifests,blobs,referrers}`; any other path is `404`/`400`, F18), no inbound credential, `GET` and `HEAD` only (anything else is `405`); `/healthz` is local |
 | Body cap / timeouts | no request body is read or forwarded; `ReadHeaderTimeout` 10 s; `IdleTimeout` 120 s; `MaxHeaderBytes` 32 KiB; no `WriteTimeout` (blobs stream); upstream dial 5 s and response-header 30 s, no total deadline; 64 forwards in flight (B.PX-2); the deadlines, the header cap and the bound are pinned by tests (F20) |
 | Trusted forwarding hops | one: joxit's nginx in the same namespace; the proxy uses no client address, sets no `X-Forwarded-*` of its own, and drops the ones it receives, with `Cf-*` (F18) |
@@ -158,26 +164,32 @@ subtests). Verified in code and tests:
   redirects not followed, `..` traversal rejected, config URL validation, and spec-conformant token
   expiry (default 60 s; issue time = min(`issued_at`, local clock)).
 
-**Findings after this pass: 23 — 14 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive.** F23 (2026-10-20, RESOLVED in 0.1.8): the published `linux/arm64` image carried the amd64 binary; the image build no longer uses QEMU.
+**Findings after this pass: 24 — 17 RESOLVED, 5 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive.** F23 (2026-10-20, RESOLVED in 0.1.8): the published `linux/arm64` image carried the amd64 binary; the image build no longer uses QEMU. F24 (2026-10-22, RESOLVED in 0.1.9, commit pending): `govulncheck` reported a reachable Go standard-library advisory on 1.26.9; the toolchain and the builder moved to 1.26.10.
 Nothing is Medium or higher; every open item is Low or Info and none widens access.
 
-- **F5 corrected (Low, MITIGATED).** The baseline called the plaintext hop to the token service
+- **F5 corrected (Low, MITIGATED; decided 2026-10-22: accepted, revisit at the second node).** The baseline called the plaintext hop to the token service
   RESOLVED by "WireGuard + SPIFFE mutual authentication". The platform no longer runs mutual
   authentication (decision D18) and WireGuard protects only inter-node traffic; the cluster is one
   node. The hop is plain in-cluster HTTP bounded by NetworkPolicy, client-secret authentication at the
   token service and Cloudflare Access in front of the UI. `SECURITY.md` now says so (0.1.7).
 - **Closed by the 0.1.7 fix wave:** F17, F18, F20, F22 (RESOLVED).
-- **Still MITIGATED, with the remainder outside this repository or a maintainer task:**
-  - F10: the procedure is documented and rotation is restart-free; the rehearsal, a cadence and a
-    last-rotation record are maintainer tasks, and `SECRETS.md` / `docs/auth/OPERATIONS.md` need the
-    proxy's Secret added (named in F10);
-  - F12: the base Deployment manifest still names tag `0.1.1` (`k8s/`, platform);
-  - F19: the proxy's own door is bounded by NetworkPolicy and Access; narrowing `:8181` to the
-    `registry-ui` pod and a scheduled negative check are platform items;
-  - F21: the Hydra client is registered with a `registry:push` scope that only Keto and the proxy
-    withhold (platform manifest).
-- **Still deferred to the pre-mainnet gate:** the rotation rehearsal and cadence (F10), limits sized and
-  measured for the plan tier (F20 remainder), and external review.
+- **Closed by the 2026-10-22 pass:** F11 (the multiple-scope behaviour is by design), F12 (the base
+  Deployment tag now follows `config/images.yaml`), F20's load-measurement remainder, F24. The
+  `k8s/` changes are authored and not yet applied (below).
+- **Authored 2026-10-22, MITIGATED until the cluster apply is logged (applied: see log):**
+  - F19: `:8181` is narrowed to exactly the `registry-ui` pod and the `platform-probe` pod, and a scheduled
+    negative check (CronJobs in `registry` and in a namespace of its own) fails unless an unlisted pod's
+    connection is dropped; residual: node-level `host` identity (OQ8);
+  - F21: `registry:push` is removed from the `registry-browser` client registration; it takes effect when
+    `hydra-client-setup` is re-run.
+- **Still MITIGATED, with the remainder a maintainer task:** F10 (the rotation rehearsal, a cadence and a
+  last-rotation record); F3 and F5 carry decided, accepted residuals (2026-10-22).
+- **Load measurement (F20, 2026-10-22):** about 100-230 us of CPU per forwarded request, so the 200m limit
+  carries 900-2,000 requests/s against at most 20 r/s per visitor at the ingress; peak resident memory 22 MiB
+  at four times the in-flight bound. The pod is resized to 20m / 16Mi requests and 200m / 64Mi limits
+  (authored, applied: see log).
+- **Still deferred to the pre-mainnet gate:** the rotation rehearsal and cadence (F10), the registry
+  credential inventory and external review.
 
 **Posture:**
 
@@ -193,7 +205,7 @@ Nothing is Medium or higher; every open item is Low or Info and none widens acce
 
 | Actor | Holds / proves | Can do | Bounded by |
 | --- | --- | --- | --- |
-| Browser UI / same-namespace client (joxit's nginx; anyone who can drive the UI) | reachability to :8181; no credential. The public UI is behind Cloudflare Access | send `GET`/`HEAD` for a registry read route with any headers; drive scope prediction and cache keys | read-only upstream identity; `405` for other methods, no body forwarded (F8); scope-exact bounded cache (F3, F7); 64 in flight (F15); `ReadHeaderTimeout` and 32 KiB headers; 401→403 remap; route allowlist and canonical-path check (F18); `X-Forwarded-*`/`Cf-*` dropped (F18) |
+| Browser UI / same-namespace client (joxit's nginx; anyone who can drive the UI) | reachability to :8181 (the `registry-ui` and `platform-probe` pods once the 2026-10-22 policy is applied; before, any pod in three namespaces); no credential. The public UI is behind Cloudflare Access | send `GET`/`HEAD` for a registry read route with any headers; drive scope prediction and cache keys | read-only upstream identity; `405` for other methods, no body forwarded (F8); scope-exact bounded cache (F3, F7); 64 in flight (F15); `ReadHeaderTimeout` and 32 KiB headers; 401→403 remap; route allowlist and canonical-path check (F18); `X-Forwarded-*`/`Cf-*` dropped (F18) |
 | On-path attacker (proxy ↔ token service) | plaintext in-cluster HTTP on one node | observe the Basic-auth secret and issued tokens | NetworkPolicy, one node, WireGuard between nodes only; no mutual authentication (F5) |
 | Malicious / compromised upstream registry | operator config, or MITM | craft `WWW-Authenticate` (`service`, `scope`); huge bodies; cookies, CORS grants, `Connection`-named fields, redirects | fetcher 10 s timeout + 64 KiB cap; redirects not followed (F4); streamed responses; quote-aware parse and a read-only scope filter (F8); response filtering (F14); 30 s response-header deadline (F15) |
 | Token service / IdP (registry-token-service → Hydra, Keto) | the authority | issue tokens with the granted intersection | fail-closed 502 here; its own audit |
@@ -231,9 +243,11 @@ Critical / High / Medium / Low / Info / Positive.
   - `Dockerfile`, `.dockerignore`, `go.mod`, `.env.example`, `scripts/*.sh` (image notices)
   - `.github/workflows/{go-ci,docker-publish}.yml`, `.github/dependabot.yml`
   - `README.md`, `CLAUDE.md`, `AGENTS.md`, `SECURITY.md`, `CHANGELOG.md`, `llms.txt`
-  - read-only: `k8s/base/registry/{auth-proxy,networkpolicy.yaml,registry-ui}`,
-    `k8s/clusters/meddleware-org/registry` (digest pin), `k8s/base/auth/jobs/*` (the `registry-browser`
-    client and tuples), `config/images.yaml`, `docs/auth/OPERATIONS.md`
+  - read-only until 2026-10-22, changed by the platform pass of that date (authored, not applied):
+    `k8s/base/registry/{auth-proxy,networkpolicy.yaml,registry-ui,origin-lock}`,
+    `k8s/clusters/meddleware-org/{registry (digest pin),origin-lock-test}`, `k8s/base/auth/jobs/*` (the
+    `registry-browser` client and tuples), `k8s/clusters/meddleware-org/install.sh` (smoke test),
+    `config/images.yaml`, `docs/auth/OPERATIONS.md`, `docs/networking/{ORIGIN_LOCK,RATE_LIMITS}.md`
 - **Out of scope:**
   - registry-token-service, Hydra, Keto and the Distribution registry (their own audits / upstream);
   - the Cloudflare Access policy and the cluster network itself (PLATFORM lens);
@@ -253,6 +267,9 @@ Critical / High / Medium / Low / Info / Positive.
 | Live (2026-10-10) | `GET` and `POST https://registry-ui.meddleware.co.uk/v2/_catalog` without a session answer `302` to the Cloudflare Access login: the UI that fronts the proxy is not anonymous |
 | Registries (2026-10-18) | 0.1.7 released and deployed 2026-10-18: `sha256:15038201…f097e`, cosign-verified against the workflow-anchored identity (`verify-digests.sh` 16/16); quay.io and Docker Hub tags were not re-queried by this audit pass |
 | On-node route checks (2026-10-18, after the rollout) | allowed routes `200`, write methods `405`, non-routes `404`, non-canonical paths `400` (from the release facts; not re-run by this pass) |
+| 2026-10-22, 0.1.9 tree, `GOTOOLCHAIN=go1.26.10` | `go vet` (with and without `-tags load`) and `gofmt -l` clean; `go test -race -cover -count=1 ./...` ok — proxy 96.9-97.4% (varies by timing between runs), token 95.5%, config 86.7%, `cmd/server` 38.6%; 60 test functions (143 runs); golangci-lint v2.13.0 `0 issues` (also with `--build-tags load`); govulncheck v1.8.0 `No vulnerabilities found` (on go1.26.9 it reports GO-2026-6809, F24); `CONTAINER_CLI=podman sh scripts/check-image-notices.sh` `image notices OK` with the 1.26.10 builder |
+| 2026-10-22 load runs (F20) | `go test -tags load ./internal/loadtest` on a 4-CPU host, the proxy pinned to one CPU and (second run) in a systemd user scope with `CPUQuota=20%` and `MemoryMax=128M`; numbers in F20 |
+| 2026-10-22 manifests | `kubectl kustomize k8s/clusters/meddleware-org/registry` and `…/origin-lock-test` render; `probe.sh` passes shellcheck and was run in the pinned curl image under rootless podman against a listening port, a closed port, an unresolvable name and a blackholed address; **no cluster was contacted** |
 | 2026-10-03 scratch probes (F3, F7, F8, F11) | superseded: each scenario is now a committed test (see the findings) |
 
   The 2026-10-09 results above are kept as the baseline of the 0.1.6 review; the 2026-10-18 rows are the
@@ -291,7 +308,7 @@ segments are no longer cleaned for prediction and forwarded as sent: they are re
 
 ### F3 — Token cache has no size bound (memory and amplification) — **re-opened**
 **Severity:** Low   **Disposition:** MITIGATED (re-opened 2026-10-03; the bound and single-flight
-landed in 0.1.4, `e1ed1c8`; the load-amplification residual is accepted, S3)
+landed in 0.1.4, `e1ed1c8`; the load-amplification residual is accepted, S3: decided 2026-10-22)
 **Where (at 2026-10-03):** `internal/token/cache.go:39-65`. `Get` deleted an expired entry only when
 **that key** was read again, and `Set` never evicted.
 
@@ -332,6 +349,14 @@ landed in 0.1.4, `e1ed1c8`; the load-amplification residual is accepted, S3)
   20 requests per second per visitor on `registry-ui` (`k8s/base/registry/registry-ui/ingress.yaml`),
   Cloudflare Access in front of the UI, and the token service's own limits. Each cache entry is one
   scope string and one token, so 512 entries is a small fixed memory cost.
+- **Decided 2026-10-22: accepted; no negative cache (S3, OQ2).** Reasons: the amplification is bounded four
+  ways and measured (F20): at most 64 forwards in flight; the 200m CPU limit, which carries only about
+  500-600 never-seen-repository requests per second (each costs 350-410 us of CPU: probe, token request,
+  retry), so at most that many token-service calls per second; the nginx limit of 20 r/s per visitor (an
+  attacker behind Access is an authenticated human); and the token service's own limits. A negative cache
+  would add state, a TTL and a staleness window (a repository granted a moment ago would still read as
+  denied) to blunt a cost that is already bounded and small. Revisit only if the token service shows load
+  from this path.
 
 ### F4 — Upstream redirects no longer auto-followed
 **Severity:** Low   **Disposition:** RESOLVED (redirect half, re-verified 2026-10-09 —
@@ -373,6 +398,14 @@ registry": plaintext in-cluster HTTP, **not mutually authenticated** (decision D
 at the token service, the read-only grants, and the single node (WireGuard between nodes only). Written
 consistently with the registry-token-service wording. The disposition stays MITIGATED: the hop is still
 plaintext.
+
+**Decided 2026-10-22: accepted on the single node; revisit when a second node joins.** Reasons: on one node
+the hop never leaves the host, and the only party that could observe it is a process with host access, which
+already holds the node's Secrets; the controls that matter (client-secret authentication at the token
+service, the read-only grants, the narrowed NetworkPolicy of F19) are in place. A second node adds WireGuard
+(already enabled) but still no peer authentication; the point at which to reconsider mutual authentication or
+a TLS listener on the token service is the multi-node move, not before. The disposition stays MITIGATED, not
+RESOLVED, because the hop remains plaintext.
 
 ### F6 — Response splitting / header injection not exploitable
 **Severity:** Positive (re-verified 2026-10-09) — header copy uses `Header().Add`. Go rejects CR/LF in
@@ -461,8 +494,12 @@ delete access through the UI. The proxy's stated invariant does not hold.
 - **Read-only no longer rests on Keto alone**: the Keto tuples (`pullers`, `listers`), the proxy's
   method and scope filters, and the token service's intersection are independent layers. The Hydra
   client registration is still broader than needed (F21).
-- **Product effect (OQ6):** the `registry-ui` manifest sets `DELETE_IMAGES: "true"`, so the UI's delete
-  action now fails with `405` by design.
+- **Product effect (OQ6, decided 2026-10-22):** the `registry-ui` manifest set `DELETE_IMAGES: "true"`, so the
+  UI's delete action failed with `405` by design. The manifest now sets `"false"` (authored 2026-10-22,
+  applied: see log), so the UI no longer offers an action that cannot work. The `405` is pinned through the
+  wired server by `TestWiredDeleteIsRefused`: `DELETE` on a manifest by digest or tag, a blob and the
+  catalog, with and without a stale `Authorization`, is `405` with `Allow: GET, HEAD`, and neither the
+  registry nor the token service is contacted; the `HEAD` that precedes a UI delete is still forwarded.
 
 ### F9 — The release gate is weaker than CI, and the image toolchain differs from the checked one
 
@@ -545,7 +582,8 @@ rehearsal, a cadence and a last-rotation record are maintainer tasks, Section D)
   The compromise procedure is the same steps with the new value at once, then a review of the token
   service and registry logs. Hydra holds one secret per client, so there is no overlap window to
   rehearse beyond the Secrets-first ordering.
-- **Outside this repository (mention only, not edited):**
+- **Outside this repository (done by 2026-10-22: `SECRETS.md` lists `registry-auth-proxy-secret` and
+  `docs/auth/OPERATIONS.md` "Rotate a client secret" names it and the update-first order; checked 2026-10-22):**
   - `SECRETS.md` should list `registry-auth-proxy-secret` (namespace `registry`, key `client-secret`,
     SOPS source `registry/auth-proxy-secret.enc.yaml`, written by `bootstrap/profiles/single-node.sh`
     and `recover-secrets.sh`) and say it must equal `browser-client-secret` in `hydra-client-secrets`;
@@ -556,9 +594,9 @@ rehearsal, a cadence and a last-rotation record are maintainer tasks, Section D)
 
 ### F11 — Challenge parsing and fetch-URL details
 
-**Severity:** Info   **Disposition:** MITIGATED (parser and body-read halves RESOLVED in 0.1.4, the
-query-string half in 0.1.7; the multiple-scope behaviour is by design and the health endpoint is
-process liveness only)
+**Severity:** Info   **Disposition:** RESOLVED (parser and body-read halves in 0.1.4, the query-string half in
+0.1.7; the multiple-scope behaviour is by design, decided 2026-10-22; the health endpoint is process
+liveness only and documented)
 **Where (at 2026-10-03):** `handler.go:323-348`, `fetcher.go:204-209`.
 
 - **Not quote-aware.** `parseBearerChallenge` splits on `,` without honouring quoted strings:
@@ -582,7 +620,12 @@ deadline.
   scan quoted strings with escapes and match the scheme case-insensitively. `TestParseBearerChallenge`
   pins a comma inside a quoted scope, a space-separated list, an escaped quote, a lowercase scheme, a
   `service=` string inside another parameter, and a non-Bearer challenge.
-- **Multiple scopes — unchanged by design.** `readOnlyScope` now vets every entry, but the list still
+- **Multiple scopes — by design (decided 2026-10-22).** The Distribution spec allows repeated `scope`
+  parameters and the proxy sends one space-separated `scope` value, vetted entry by entry. Reasons it stays:
+  the registry's challenges for the UI's requests name one scope each, so the list form is never exercised;
+  the token service now evaluates every `scope` parameter and the space-separated form alike
+  (registry-token-service F16, 0.1.7); and a different encoding would be untestable against a real
+  challenge. Revisit only if the registry starts challenging with several scopes. Earlier text: `readOnlyScope` now vets every entry, but the list still
   goes to the token service as one `scope` value (`fetcher.go:368-372`); how it is read is the token
   service's (registry-token-service F16). The registry's challenges for the UI's requests name one scope each, so this is dormant.
 - **Endpoint query string — RESOLVED (0.1.7, commit `de46a96`).** The fetch URL is now built with
@@ -596,8 +639,8 @@ deadline.
 
 ### F12 — Documentation drift
 
-**Severity:** Info   **Disposition:** MITIGATED (0.1.7, commit `de46a96`: every item that lives in this
-repository is fixed; the base Deployment manifest tag is in `k8s/`, outside it)
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit `de46a96`: every item that lives in this
+repository; the base Deployment manifest tag, in `k8s/`, was brought in line 2026-10-22)
 
 - SECURITY.md invariant 4 ("predicts and requests only `pull` and `catalog`") was false for requests
   (F8). CLAUDE.md "read-only" described the identity, not the proxy (F8).
@@ -622,10 +665,10 @@ repository is fixed; the base Deployment manifest tag is in `k8s/`, outside it)
   - CLAUDE.md, AGENTS.md, `llms.txt`, the README and `.env.example` describe the route allowlist, the
     re-read, the notices and the new tests;
   - `docs/` (this audit) is committed with the release commit.
-- **Still open, outside this repository:** `k8s/base/registry/auth-proxy/deployment.yaml` names tag
-  `0.1.1` (the cluster overlay replaces it with the 0.1.7 digest since 2026-10-18 (0.1.6 before), so the cluster is correct; the base
-  alone would run 0.1.1). Platform item: bump or remove the tag in the base, or make the base reference
-  the placeholder the overlay already replaces. Not edited here.
+- **Closed 2026-10-22 (the platform item):** `k8s/base/registry/auth-proxy/deployment.yaml` had drifted to tag
+  `0.1.7` (the audit text said `0.1.1`); the cluster overlay always replaced it with the pinned digest, so the
+  cluster was correct. The base tag now equals the tag in `config/images.yaml` (`0.1.8`; the token-service base
+  tag moved the same way), and the rendered image refs are unchanged (digest-only).
 
 ### F13 — Positive: credential handling and fail-closed behaviour are implemented and tested
 
@@ -793,8 +836,9 @@ raw path with an empty, `.` or `..` segment before the handler runs (checked and
 
 ### F19 — The proxy's own door: NetworkPolicy breadth, no origin to lock, no scheduled negative check
 
-**Severity:** Info   **Disposition:** MITIGATED (a scheduled negative check is a pre-mainnet item,
-Section D)
+**Severity:** Info   **Disposition:** MITIGATED (authored 2026-10-22: `:8181` narrowed to the two pods that
+call it, and a scheduled negative check added; applied: see log. Becomes RESOLVED when the apply and the
+first PASS verdicts are logged. Residual: node-level `host` identity, OQ8)
 **Where:** `k8s/base/registry/networkpolicy.yaml`; `k8s/base/registry/auth-proxy/{deployment,service}.yaml`;
 `k8s/base/registry/registry-ui/{deployment,ingress}.yaml`; `CLAUDE.md` ("network policy prevents
 external access").
@@ -825,10 +869,50 @@ the read-only identity to any pod that reaches it. Platform item, not edited her
 `platform-probe`) with a `namespaceSelector` and `podSelector` in one peer, and add the scheduled negative
 probe.
 
+**Remediation / evidence (2026-10-22; authored, rendered, not applied; applied: see log):**
+
+- **Who calls `:8181`** (grep of the workspace, 2026-10-22): joxit's nginx (`NGINX_PROXY_PASS_URL` in the
+  `registry-ui` manifest), the `platform-probe` "Registry API" check (`/v2/_catalog`), and `install.sh`'s
+  smoke test. Nothing else: the ingress controller has no route to it (no Ingress; it reaches `registry-ui:8080`),
+  and vmagent does not scrape it (no `/metrics`, no `prometheus.io` annotation).
+- **Policy** (`k8s/base/registry/networkpolicy.yaml`): `allow-registry-ingress` (the three namespaces) now
+  selects every pod with `app NotIn [registry-auth-proxy]`, because NetworkPolicies add up and a namespace-wide
+  admission would otherwise still cover the proxy; the new `allow-auth-proxy-ingress` admits to `8181` exactly
+  `registry` / `app=registry-ui` and `apps` / `app=platform-probe` (`namespaceSelector` and `podSelector` in
+  one peer, as the `auth` policy does). `allow-registry-ui-probe` also narrows platform-probe's `:8080`
+  admission from every registry pod to the `registry-ui` pod (the token service listens on 8080 too).
+- **Smoke test.** `install.sh`'s `registry_auth_smoke` ran a throwaway curl pod in `registry`, which the
+  narrowed policy would refuse; it now runs `wget` inside the `registry-ui` pod (busybox `wget` is in
+  joxit 2.6.0, checked). Anything else that wants to call the proxy must be an allowed pod.
+- **Scheduled negative check** (`k8s/base/registry/origin-lock`, included in the registry kustomization, plus
+  `k8s/clusters/meddleware-org/origin-lock-test` for the second vantage). A CronJob runs an unprivileged curl
+  pod (pinned `curlimages/curl` 8.22.0 by digest, the registry init container's pin; no ServiceAccount token,
+  so no RBAC; read-only root; drops all capabilities; 5m/8Mi requests, 100m/32Mi limits; `backoffLimit: 0`,
+  120 s deadline) every hour from (a) an unlabelled pod in `registry` (`:23`) and (b) a pod in the dedicated
+  namespace `origin-lock-test` (`:41`). The Job fails unless every blocked URL is **dropped**: curl exit 28 with
+  no handshake (`time_connect` 0) after the name resolved (`time_namelookup` > 0). An answer is REACHABLE, a
+  refusal/reset/DNS failure is INCONCLUSIVE (a stopped proxy refuses too), and a vantage with a control (the
+  registry-namespace one reaches `registry-ui:80` and must see `200`) fails if the control fails. The foreign
+  vantage also checks `registry-ui`, `token-service` and `registry`, which the namespace-wide admission
+  protects the same way. The script passes shellcheck and was run in the pinned curl image (user 100:101, read-only root, rootless
+  podman) against a blackholed address with a listening control (PASS), a listening port (REACHABLE, exit 1) and an
+  unresolvable name (INCONCLUSIVE, exit 1), and locally against a closed port; the in-cluster behaviour is not
+  verified until the apply. Procedure and commands: `docs/networking/ORIGIN_LOCK.md` (workspace).
+- **Positive path** is the status page's "Registry API" check (the allowed platform-probe peer, every minute)
+  and the UI itself; the probe cannot impersonate an allowed pod, and labelling a CronJob pod `app=registry-ui`
+  would put it behind the `registry-ui` Service.
+- **Not wired to the status page:** platform-probe checks HTTP URLs only and the verdict lives in a Job. The
+  failure shows as a failed Job and as `kube_job_status_failed` (kube-state-metrics, already scraped). Follow-up
+  (OQ9): an alert rule or a small verdict endpoint.
+- **Residual (OQ8):** Cilium gives a node's own processes and `hostNetwork` pods (the ingress controller,
+  node-exporter) the `host` identity, which pod selectors cannot exclude and which is allowed to reach local
+  pods by default; reaching the proxy that way needs a compromised node or hostNetwork pod. The negative check
+  cannot cover it (neither vantage is the host).
+
 ### F20 — The new deadlines and header cap are configured but not exercised by tests
 
-**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit `de46a96`; sizing and measuring the limits for
-the plan tier stays a pre-mainnet measurement, Section D)
+**Severity:** Info   **Disposition:** RESOLVED (0.1.7, commit `de46a96`; the load measurement and the resource
+sizing landed 2026-10-22, harness in 0.1.9; the resized manifest is authored, applied: see log)
 **Where (0.1.6):** the values were constants in `NewHandler` and `main`; `cmd/server` had 0% coverage.
 **Where (0.1.7):** `limits`/`defaultLimits`/`newHandler` in `internal/proxy/handler.go` (the constants
 become fields a test can shorten); `newServer` and its constants in `cmd/server/main.go`;
@@ -858,12 +942,54 @@ under `-race`):**
   `TestServerRefusesOversizeHeaders` (a 40 KiB header is `431` and never reaches the handler; 16 KiB is
   served), `TestHealth`, `TestSecretRotationWithoutRestart`, `TestWiredRoutePolicy`: `cmd/server` coverage
   0% to 38.6% (`main` itself, which needs a signal, is the rest).
-- **Remainder (maintainer, pre-mainnet):** limits sized for the plan tier and measured under load.
+- **Remainder, done 2026-10-22: limits measured under load and the resources sized.** Harness:
+  `internal/loadtest` (build tag `load`, test code only; `GOTOOLCHAIN=go1.26.10 go test -tags load -run
+  TestLoad -v ./internal/loadtest`). It builds the binary, runs it as a separate process against a stub
+  registry and token service in the test process, and reports per step: requests/s, client-side p50 and p99,
+  the 200/503 mix, the proxy's CPU time per request (from `/proc`) and its peak resident set (`VmHWM`). Host: 4
+  CPUs, the proxy pinned to one, the clients and stubs on the other three; `LOAD_CPU_QUOTA=20%
+  LOAD_MEM_MAX=128M` runs the proxy in a systemd user scope, which is how a `200m` / `128Mi` container limit
+  behaves (4 s per step; the first step of each run includes warm-up and understates throughput).
+
+  | Scenario (token cached unless noted) | Concurrency | One CPU: req/s · p99 · CPU per req | At 200m: req/s · p99 | Peak RSS |
+  | --- | --- | --- | --- | --- |
+  | 1 KiB response, keep-alive | 16 | 9,800 · 4 ms · 98 us | 1,900 · 83 ms | 12 MiB |
+  | same | 64 (the bound) | 7,100 · 18 ms · 140 us | 1,400 · 95 ms | 14-16 MiB |
+  | same | 256 | 14,300 (7 in 10 are `503`) · 42 ms | 2,800 (7 in 10 `503`) · 204 ms | 21 MiB |
+  | 1 KiB, a new connection per request (nginx `proxy_pass` without keep-alive) | 16 / 64 | 7,300 · 4 ms · 137 us / 4,500 · 25 ms · 219 us | 1,400 / 890 · 84 ms / 183 ms | 12-16 MiB |
+  | 1 KiB, upstream answers in 20 ms | 64 | 3,000 · 25 ms | 1,040 · 99 ms | 15 MiB |
+  | 64 MiB blob streamed | 1 / 64 | 1.6 GiB/s total · 40 ms CPU per blob | 330 MiB/s total | 8.5-11 / 15-17 MiB |
+  | 64 MiB blob streamed | 96 (the bound) | 438 of 607 requests `503` | 214 of 294 `503` | 16-20 MiB |
+  | never-seen repository per request (probe + token request + retry; token service 5 ms, registry 2 ms) | 64 | 2,650 req/s and as many token calls · 37 ms · 376 us | 490 · 202 ms · 412 us | 15 MiB |
+
+  Findings: the proxy is CPU-bound, not memory-bound, and cheap: **about 100-230 us of CPU per forwarded
+  request**, so the 200m limit carries roughly 900-2,000 requests/s, whereas the ingress admits one visitor
+  at most 20 r/s (4.6 ms of CPU per second, 2.3% of the limit); about 45 visitors at the limit at once would be
+  needed to saturate the pod. The in-flight bound behaves as specified: below 64 clients no request is
+  refused (the 64-client step, which sits at the bound, saw none), above it the excess is answered `503` +
+  `Retry-After: 1` for about 50-70 us of CPU each, and the admitted share still completes; a blob stream does
+  not buffer (RSS grows by about 0.1 MiB per open 64 MiB stream). Under saturation of the CPU limit, p99
+  rises to 80-100 ms from CFS throttling (a 20 ms quota per 100 ms period), which does not occur at the
+  allowed rates (751 req/s with a 20 ms upstream: p99 23 ms). The cold-miss storm of F3 costs 350-410 us of CPU
+  per request, so the CPU limit caps token-service calls at about 500-600 per second, a second brake behind
+  nginx's per-visitor limit.
+
+  Sizing (authored in `k8s/base/registry/auth-proxy/deployment.yaml`): CPU request 20m (steady load at the
+  nginx limit is about 5m), **CPU limit stays 200m** (it carries the load with about 45x headroom and is the
+  amplification brake above); memory request 16Mi (8-12 MiB at the lowest load steps), **limit 128Mi to 64Mi** (the worst case
+  measured is 22 MiB, about a third of the new limit). The nginx annotations on `registry-ui` are not
+  changed: 20 r/s, burst 80 per visitor is far below the proxy's capacity and is what bounds a single visitor.
+  Cloudflare free plan: the one rate-limit rule is the `token.` rule, which cannot be shared (one threshold, one
+  counter per rule; its 5 requests / 10 s would break a UI page), so `registry-ui.` has no edge rule; Access
+  (SSO) plus the ingress limit are the outer layers, and an edge rule needs a paid plan
+  (`docs/networking/RATE_LIMITS.md`, "Registry UI and the auth proxy"). Measured on go1.26.9; one spot re-run on
+  go1.26.10 matched (7,240 req/s at 16 clients, 137 us).
 
 ### F21 — The `registry-browser` Hydra client is registered with a `registry:push` scope
 
-**Severity:** Low   **Disposition:** MITIGATED (three independent layers withhold push; the
-registration is a platform manifest)
+**Severity:** Low   **Disposition:** MITIGATED (three independent layers withhold push; the registration is
+corrected in the manifest, authored 2026-10-22, and takes effect when `hydra-client-setup` is re-run; applied:
+see log. RESOLVED once the log records the re-run)
 **Where:** `k8s/base/auth/jobs/hydra-client-setup.yaml:92-94`
 (`registry-browser` … `"registry:push registry:pull registry:catalog"`);
 `k8s/base/auth/jobs/keto-relations-setup.yaml:107-123`.
@@ -877,6 +1003,18 @@ scope (F8). The client scope is not what the token service enforces.
 the setup Job) is a one-line platform change outside this repository (2026-10-18: not edited here; the
 Hydra client registration and its Job are platform manifests — OQ7). A mis-edit of the Keto tuples
 alone no longer widens the browser.
+
+**Remediation / evidence (2026-10-22; authored, applied: see log):** `k8s/base/auth/jobs/hydra-client-setup.yaml`
+registers `registry-browser` with `registry:pull registry:catalog`, the minimum the UI needs (it lists the
+catalog and pulls metadata). The token service does not request the client's scope when it asks Hydra for a
+token (registry-token-service OQ6: the grant is requested without one), so the narrower registration cannot
+break the token exchange; the live check after the re-run is the catalog call below. The registry-token-service
+audit's B.AUTH-2 row is updated to match. To apply: `kubectl -n auth delete job hydra-client-setup
+--ignore-not-found && kubectl apply -k k8s/clusters/meddleware-org/auth-setup` (the Job upserts every client; the
+secrets are unchanged), then verify with `kubectl -n auth exec deploy/hydra -- hydra get oauth2-client
+--endpoint http://127.0.0.1:4445 registry-browser` (the scope must not contain `registry:push`) and
+`kubectl -n registry exec deploy/registry-ui -- wget -q -T 5 -O - http://registry-auth-proxy.registry.svc.cluster.local:8181/v2/_catalog`
+(still `200`).
 
 ### F22 — No licence or notice text for the compiled-in stdlib and the CA bundle ships in the image
 
@@ -921,6 +1059,24 @@ build on every platform (checked by hard-coding `GOARCH=amd64` and building `lin
 impossible): the amd64 image built from the 0.1.7 sources with `VERSION=v0.1.7` is byte-identical to the published
 amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11…`; `go version -m`: `GOARCH=arm64`,
 `GOOS=linux`, `CGO_ENABLED=0`, `-trimpath=true`) and the rest of its tree equals the published one.
+
+### F24 — The Go 1.26.9 standard library carries a reachable advisory, GO-2026-6809 (found 2026-10-22)
+
+**Severity:** Low   **Disposition:** RESOLVED (0.1.9, commit pending; not yet released or deployed)
+**Where:** `go.mod` (`toolchain go1.26.9`), `Dockerfile` (builder `golang:1.26.9-bookworm`).
+**Issue:** `govulncheck` v1.8.0 on the 0.1.8 tree reports GO-2026-6809 ("distrust compromised intermediate
+certificates in `crypto/x509`", fixed in go1.26.10) as reachable (trace: `Handler.ServeHTTP` → `io.Copy` →
+`x509.Certificate.Verify`). The release workflow runs govulncheck on the tag, so the 0.1.8 image was published
+before the advisory existed or was reported; `main`'s CI would now fail.
+**Impact:** the proxy verifies certificates only if `UPSTREAM_URL` or `TOKEN_ENDPOINT` is `https`; the deployed
+hops are plain in-cluster `http`, so the vulnerable path is not exercised in the cluster. Severity Low.
+**Remediation / evidence:** 0.1.9: `toolchain go1.26.10` and the builder `golang:1.26.10-bookworm@sha256:632dff73…a21af`
+(the same lookup reproduces the 1.26.9 pin `sha256:d9c68c2c…641453c`, so the method is sound). Checked:
+govulncheck `No vulnerabilities found`, the full suite on 1.26.10, and the Dockerfile's builder-equals-toolchain
+guard passes in a rootless podman build (`scripts/check-image-notices.sh`: `image notices OK`). No source
+change; the digest of the published 0.1.9 image replaces 0.1.8 in `config/images.yaml` when the orchestrator
+releases it. Other Go services built on 1.26.9 (platform-probe, registry-token-service, static-server) are
+likely to be flagged the same way; not checked here.
 
 ---
 
@@ -968,7 +1124,7 @@ amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11
 | GO | Graceful shutdown | HOLDS (code-only; `main` needs a signal) — SIGTERM and SIGINT call `Server.Shutdown` with 10 s (`main.go:78-87`) |
 | GO | Health & version | HOLDS — `/healthz` returns `{"status":"ok"}`; no `/version` |
 | GO | Error handling | HOLDS — fixed text bodies (`upstream unavailable`, `auth service error`, `scope not permitted`, `busy`, `loop detected`, `invalid path`, `not found`); the token-fetch log carries a class, not the URL (F17) |
-| GO | CI (B.GO-1) | HOLDS — `go vet`, golangci-lint v2.13.0, race tests, govulncheck v1.8.0 (pinned), Trivy filesystem scan; no `go.sum` (stdlib only); `-trimpath`, `CGO_ENABLED=0`, version injected with `-X main.version` |
+| GO | CI (B.GO-1) | HOLDS (toolchain advisory GO-2026-6809 fixed by 1.26.10 in 0.1.9, F24) — `go vet`, golangci-lint v2.13.0, race tests, govulncheck v1.8.0 (pinned), Trivy filesystem scan; no `go.sum` (stdlib only); `-trimpath`, `CGO_ENABLED=0`, version injected with `-X main.version` |
 | IMG | Base images | HOLDS — builder digest-pinned and checked against the `go.mod` toolchain; runtime `scratch` |
 | IMG | Build context | HOLDS — `.dockerignore` excludes `.git`, `docs/`, `.env*`, `client-secret`, `*.key`, `*.pem` |
 | IMG | Reproducible build stage | HOLDS — `go.mod` only, no dependency to resolve; only the binary and the CA bundle reach the runtime stage |
@@ -976,7 +1132,7 @@ amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11
 | IMG | Build host and emulation | HOLDS (0.1.8, F23) — the builder stage is `FROM --platform=$BUILDPLATFORM` and cross-compiles with `GOOS=$TARGETOS GOARCH=$TARGETARCH` (no default for either; the `RUN` aborts if one is empty; a `go version -m` step asserts the binary's `GOARCH` equals the target); `docker-publish.yml` has no `docker/setup-qemu-action` step, so no privileged binfmt step runs in the release; rootless podman build of both platforms with no binfmt handler: the amd64 image equals the published 0.1.7 in every file, the arm64 image holds an ELF aarch64 binary |
 | IMG | Runtime user & filesystem | HOLDS — `USER 65534:65534`; pod: `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, all capabilities dropped, `RuntimeDefault` seccomp, `automountServiceAccountToken: false` |
 | IMG | Runtime configuration | HOLDS — the image sets only `PORT`; the manifest sets `UPSTREAM_URL`, `TOKEN_ENDPOINT`, `CLIENT_ID`, `CLIENT_SECRET_FILE`, `TOKEN_REFRESH_MARGIN`, `LOG_LEVEL` |
-| IMG | Health & resources | HOLDS — readiness and liveness on `/healthz`; requests 20m/32Mi, limits 200m/128Mi |
+| IMG | Health & resources | HOLDS — readiness and liveness on `/healthz`; requests 20m/16Mi, limits 200m/64Mi, sized from the load test (F20; authored 2026-10-22, applied: see log; deployed until then: 20m/32Mi and 200m/128Mi) |
 | IMG | SBOM & notices | HOLDS — SPDX attestation generated from the pushed image; licence notices (Go standard library, CA bundle copyright, `LICENSE`) in `/usr/share/doc/registry-auth-proxy/`, checked in CI (F22, 0.1.7) |
 | IMG | Scan before sign | HOLDS — Trivy on the pushed digest before `cosign sign` (F9) |
 | IMG | Verification command | HOLDS — the README example and the job summary print the same workflow-pinned regexp (F12, 0.1.7) |
@@ -987,14 +1143,14 @@ amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11
 | AUTH | Credential validation is delegated | HOLDS — the secret is verified by Hydra through the token service; no local store or allowlist |
 | AUTH | Fail closed | HOLDS — token service unreachable, slow, non-200, malformed or empty → `502` (`TestServeHTTP_TokenFailureIsBadGateway`, `TestFetchFailsClosed`); fetch timeout 10 s |
 | AUTH | Authorization model | HOLDS by layers — the proxy requests read scopes only (F8), the token service grants requested ∩ Keto, Keto holds `pullers`/`listers` only; F21 for the client registration |
-| AUTH | OAuth client configuration | MITIGATED — confidential client, `client_credentials`, `client_secret_basic`, no redirect URIs; scope registration broader than use (F21) |
+| AUTH | OAuth client configuration | MITIGATED — confidential client, `client_credentials`, `client_secret_basic`, no redirect URIs; the manifest registers `registry:pull registry:catalog` only (F21, authored 2026-10-22; the live registration still carries `registry:push` until `hydra-client-setup` is re-run, applied: see log) |
 | AUTH | Browser authentication (BFF) | N/A — no browser token exists; joxit never sees a credential and the human session is Cloudflare Access's |
 | AUTH | Client-side token caching | HOLDS — key = the issued scope (F7), margin 30 s, bounded at 512 and evicting (F3), process memory only, never logged |
 | AUTH | Inbound credential handling | HOLDS — client `Authorization` stripped, the Bearer goes only to `UPSTREAM_URL`, redirects not followed, a credentialed `401` is remapped to `403` so no login dialog appears (I1, I3, I14) |
 | AUTH | User-supplied third-party tokens | N/A |
 | AUTH | Identity-provider configuration | N/A in this repository (PLATFORM lens) |
 | AUTH | Error & enumeration hygiene | HOLDS — fixed bodies; `403` for a refused scope or a refused token, `502` for a token-service failure; no token or IdP body is logged |
-| AUTH | Abuse limits | at the edge — Cloudflare Access and nginx per-visitor limit on the UI; the proxy adds the 64-forward bound (F15); the token path has no limit of its own (F3 residual) |
+| AUTH | Abuse limits | at the edge — Cloudflare Access and nginx per-visitor limit on the UI (no Cloudflare rule is possible on the free plan, F20); the proxy adds the 64-forward bound (F15) and its 200m CPU limit, which caps token-service calls at about 500-600/s (measured, F20); the token path has no limit of its own (F3 residual, accepted 2026-10-22) |
 | AUTH | Transport to identity services | MITIGATED — plain in-cluster HTTP on one node, NetworkPolicy, no mutual authentication (F5) |
 | AUTH | Signed-challenge protocols | N/A |
 | AUTH | Audit trail | HOLDS by delegation — the token service logs each issuance with requested and granted scope; the proxy logs a refused challenge scope (warn) and a remapped `401` (info), never a credential; per-request access lines are debug-level only |
@@ -1002,10 +1158,10 @@ amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11
 | PROXY | Request header policy | HOLDS — `Authorization`, cookies, hop-by-hop and `Connection`-named fields, `X-Forwarded-*`, `Forwarded`, `X-Real-Ip`, `True-Client-Ip`, `Cdn-Loop` and `Cf-*` removed, `Host` set, `Via` added (F14, F18); the remaining fields are the ones the registry API defines (F18) |
 | PROXY | Response header policy | HOLDS — hop-by-hop, `Connection`-named, `Set-Cookie` and `Access-Control-*` dropped (F14) |
 | PROXY | Redirects | HOLDS — `ErrUseLastResponse` on the one client (F4) |
-| PROXY | Limits & timing | HOLDS (F15, tested in F20) — 10 s header read, 120 s idle, 32 KiB headers, no body, 64 in flight, upstream dial 5 s and response-header 30 s; no total deadline by design; no cap on idle connections |
+| PROXY | Limits & timing | HOLDS (F15, tested in F20) — 10 s header read, 120 s idle, 32 KiB headers, no body, 64 in flight, upstream dial 5 s and response-header 30 s; no total deadline by design; no cap on idle connections; measured under load 2026-10-22 and the pod sized from it (F20) |
 | PROXY | Error mapping | HOLDS (F16, F17): fixed `502`/`503`/`508`/`404`/`400` bodies, class-only logs for forwards and for the token fetch |
 | PROXY | Admission state | N/A — no claim/forward/commit sequence; the token cache is a cache, not a ledger (single replica, in-process) |
-| PROXY | Origin lock | N/A for the upstream (the registry is its own gate); the proxy's own door is F19 |
+| PROXY | Origin lock | N/A for the upstream (the registry is its own gate); the proxy's own door: pod-level NetworkPolicy naming exactly the `registry-ui` and `platform-probe` pods, and a scheduled negative check from an unlabelled pod and from a foreign namespace (F19, authored 2026-10-22, applied: see log); node `host` identity is a residual (OQ8) |
 | PROXY | Loop & self-reference | HOLDS — `Via` check, `508` (F14) |
 | PROXY | Configuration | HOLDS — invalid or missing values fail startup (F1); the defaults are the strict ones |
 | PROXY | Sibling parity | N/A — one implementation |
@@ -1018,11 +1174,11 @@ amd64 image (every file); the arm64 image holds an ELF aarch64 binary (`e1bb9d11
 
 | Dependency | Pinned version | Liveness dependency? | CVE / audit status | Notes |
 | --- | --- | --- | --- | --- |
-| Go toolchain (stdlib only, no modules) | `go 1.26.6`, `toolchain go1.26.9`; builder `golang:1.26.9-bookworm@sha256:d9c68c2c…641453c` | build | govulncheck v1.8.0 in CI; 1.26.7's eleven advisories (GO-2026-6607…6617) closed in 0.1.5 | the Dockerfile fails if the builder differs from `go.mod` (F9) |
+| Go toolchain (stdlib only, no modules) | `go 1.26.6`, `toolchain go1.26.10` (0.1.9); builder `golang:1.26.10-bookworm@sha256:632dff73…a21af` | build | govulncheck v1.8.0 in CI; 1.26.7's eleven advisories (GO-2026-6607…6617) closed in 0.1.5; GO-2026-6809 (go1.26.9) closed in 0.1.9 (F24) | the Dockerfile fails if the builder differs from `go.mod` (F9) |
 | registry-token-service → Hydra, Keto | runtime | **yes** — unreachable or non-200 ⇒ 502 | own audit | **fails closed**; amplification bounded (F3) |
 | Distribution registry (upstream) | runtime | **yes** — probe error ⇒ 502 | upstream | redirects not followed; deadlines (F15) |
 | Trivy / govulncheck / golangci-lint | v0.74.0 / v1.8.0 / v2.13.0 (pinned in `go-ci.yml`) | CI | | Trivy action pinned by SHA |
-| joxit/docker-registry-ui (the only caller) | 2.6.0 (`registry-ui` manifest) | runtime caller | upstream | `DELETE_IMAGES: "true"` makes its delete action fail with `405` (F8, OQ6) |
+| joxit/docker-registry-ui (the only caller) | 2.6.0 (`registry-ui` manifest) | runtime caller | upstream | `DELETE_IMAGES: "false"` since 2026-10-22 (authored, applied: see log); before, its delete action failed with `405` (F8, OQ6) |
 
 ### B.2 Publish authority, capabilities & secret custody
 
@@ -1059,7 +1215,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 
 | OAuth client / relation | Type, grant types, auth method | Redirect URIs | Scopes / relations granted | Owner | Last reviewed |
 | --- | --- | --- | --- | --- | --- |
-| `registry-browser` | confidential; `client_credentials`; `client_secret_basic` (through registry-token-service) | n/a | Hydra registration: `registry:push registry:pull registry:catalog` (broader than use, F21, platform); Keto: `pullers` on `meddleware-org`, `listers` on `catalog`; the proxy requests only pull and catalog (F8) | platform (`hydra-client-setup`, `keto-relations-setup` Jobs) | 2026-10-09 (this audit; tuples read-only) |
+| `registry-browser` | confidential; `client_credentials`; `client_secret_basic` (through registry-token-service) | n/a | Hydra registration: `registry:pull registry:catalog` in the manifest since 2026-10-22 (F21; the live client carries `registry:push` until the Job is re-run, applied: see log); Keto: `pullers` on `meddleware-org`, `listers` on `catalog`; the proxy requests only pull and catalog (F8) | platform (`hydra-client-setup`, `keto-relations-setup` Jobs) | 2026-10-22 (this audit; tuples read-only) |
 | Keto `Registry` / `meddleware-org` / `pullers` | relation | n/a | `registry-browser` (and `registry-ci-push`, `registry-node-pull`) | platform; written only by the setup Job inside `auth` | see the registry-token-service audit |
 | Keto `Registry` / `catalog` / `listers` | relation | n/a | `registry-browser` | platform | see the registry-token-service audit |
 
@@ -1089,13 +1245,14 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 | upstream connect · response · total deadline | 5 s · 30 s (headers) · none (blobs stream) | `handler.go` (`limits`, `newHandler`) | `TestDefaultLimits`, `TestLimits_DialDeadlineEndsInBadGateway`, `TestLimits_StalledUpstreamEndsInBadGatewayAndReleasesSlot`, `TestLimits_SlowBodyStreamsPastTheHeaderDeadline` |
 | token fetch | 10 s, 64 KiB; at most one retry, after a `401` and a changed secret file | `fetcher.go` (`NewFetcher`, `Fetch`, `attempt`) | `TestFetchFailsClosed`, `TestFetchRotationFailsClosed` |
 | token cache | 512 entries; margin 30 s | `cache.go:177` | `TestCacheIsBounded` |
+| pod resources | 20m / 16Mi requests, 200m / 64Mi limits (authored 2026-10-22) | `k8s/base/registry/auth-proxy/deployment.yaml` | sized from `internal/loadtest` (F20); not a CI test |
 | admission-state lifetime | in-flight slot: held for the forward, released on return, also after a timeout | `handler.go` (`defer` in `ServeHTTP`) | `TestLimits_StalledUpstreamEndsInBadGatewayAndReleasesSlot` |
 
 ---
 
 ## Section C — Test-coverage & hermetic/live split
 
-### C.1 Coverage grade — A (proxy 96.9%, token 95.5%, config 86.7%, cmd/server 38.6%; race-clean; 59 test functions, 142 runs; measured 2026-10-18 on the 0.1.7 tree)
+### C.1 Coverage grade — A (proxy 96.9-97.4%, token 95.5%, config 86.7%, cmd/server 38.6%; race-clean; 60 test functions, 143 runs; measured 2026-10-22 on the 0.1.9 tree; the proxy figure varies with timing between runs)
 
 | Dimension | Assessment |
 | --- | --- |
@@ -1110,13 +1267,15 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 | --- | --- | --- | --- |
 | Scope prediction, hop-by-hop, remap, cache, flight | yes | — | proxy and token tests |
 | Request/response field policy, route allowlist, edge fields, loop, in-flight bound, failure logs | yes (`forwarding_test.go`, `limits_test.go`) | — | F14–F18 |
+| Every non-read method refused on the wired server (`DELETE` as joxit sends it) | yes (`TestWiredDeleteIsRefused`) | — | F8, OQ6 |
 | Token fetch (Basic auth, cap, non-200, expiry) | yes | — | fetcher tests |
 | Config secret loading and URL validation; secret re-read after a refusal | yes | — | config and fetcher tests, `TestSecretRotationWithoutRestart` |
 | Server settings, header cap, upstream deadlines, in-flight bound | yes (loopback listeners and local servers; short deadlines) | — | F20 |
-| Graceful shutdown; limits sized and measured under load | no | pre-mainnet limits measurement (maintainer) | F20 remainder |
+| Graceful shutdown | no | needs a signal in `main` | — |
+| Limits measured under load | `internal/loadtest` (build tag `load`; on demand, not in CI) | — | F20 |
 | Image carries the licence notices | CI job `image` (container build; rootless podman locally) | — | F22 |
 | Live token service + registry end to end | no hermetic test; the platform-probe catalogue check exercises the real chain | staging cluster | `platform-probe` status check |
-| Negative check that a pod outside the allowed set cannot reach `:8181` | no | pre-mainnet, platform | F19 |
+| Negative check that a pod outside the allowed set cannot reach `:8181` | no (needs a cluster); the verdict logic of `probe.sh` was exercised locally | the in-cluster CronJobs (hourly), authored 2026-10-22, applied: see log | F19 |
 
 ---
 
@@ -1139,7 +1298,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 - [x] proxies strip inbound credentials; the proxy requests no scope beyond pull/catalog (F8, F14)
 - [x] non-root runtime; pod security context complete; probes and limits set; deployed by digest from `config/images.yaml` (cosign-verified 2026-10-09 for 0.1.6 and 2026-10-18 for 0.1.7)
 - [x] client identity: nothing keyed on an address; secrets never logged (I8)
-- [ ] origin lock verified positively and negatively — the proxy's door is bounded by NetworkPolicy and Access but the negative check does not exist yet (F19); maintainer/platform, pre-mainnet
+- [x] origin lock verified positively and negatively — authored 2026-10-22, applied: see log (F19): `:8181` narrowed to the `registry-ui` and `platform-probe` pods (`networkpolicy.yaml`); negative probes from an unlabelled pod in `registry` and from the `origin-lock-test` namespace (`k8s/base/registry/origin-lock`); the positive path is the status page's "Registry API" check and the UI. Verifiable only by the cluster apply; commands in `docs/networking/ORIGIN_LOCK.md`
 
 ### pre-mainnet (production)
 
@@ -1152,9 +1311,10 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 - [x] F5's platform transport cited in SECURITY.md; rotation procedure documented (F5, F10, F12) — `SECURITY.md` "Transport to the token service and the registry" (decision D18) and "Client-secret rotation and compromise", 0.1.7, commit `de46a96`; the rotation rehearsal is the maintainer line below
 - [x] README `cosign verify` pinned to the publish workflow; licence notices shipped in the image; `docs/` committed (F12, F22) — README regexp pinned to `docker-publish.yml@refs/tags/v*`; notices in `/usr/share/doc/registry-auth-proxy/` with the `image` CI job (`scripts/check-image-notices.sh`, `image notices OK` under rootless podman); `docs/` committed with the 0.1.7 commit (commit `de46a96`)
 - [ ] key rotation with overlap rehearsed; compromise procedure documented for the `registry-browser` secret (F10) — the compromise procedure is documented (`SECURITY.md`, 0.1.7) and rotation is restart-free (`TestSecretRotationWithoutRestart`); the rehearsal against the live cluster, a cadence and a last-rotation record are maintainer tasks
-- [ ] the negative origin check runs on a schedule (F19) — platform, maintainer
+- [x] the negative origin check runs on a schedule (F19) — authored 2026-10-22, applied: see log: hourly CronJobs `origin-lock-probe` in `registry` (`:23`) and `origin-lock-test` (`:41`); a failure is a failed Job and `kube_job_status_failed` (status-page wiring is a follow-up, OQ9)
 - [x] deadline and header-cap tests (F20) — `limits_test.go`, `dial_linux_test.go`, `cmd/server/main_test.go`; 0.1.7, commit `de46a96`
-- [ ] limits sized for the plan tier and measured under load (F20 remainder) — maintainer
+- [x] standard library free of known reachable advisories at release (F24) — govulncheck `No vulnerabilities found` on go1.26.10 (0.1.9, commit pending); the 0.1.9 release is the orchestrator's
+- [x] limits sized for the plan tier and measured under load (F20 remainder) — measured 2026-10-22 (`internal/loadtest`, numbers in F20); resources resized to 20m/16Mi and 200m/64Mi, authored, applied: see log; nginx limit unchanged, Cloudflare free-plan arithmetic recorded
 - [ ] registry credential inventory (scope, holder, rotation date) — maintainer, `OPERATOR_TASKS.md` "Image registry credentials", deferred to launch
 - [ ] external review of the forwarding path — awaiting external review
 
@@ -1181,7 +1341,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
   issuer side is pinned in registry-token-service; there is no shared golden vector between them, and
   the platform-probe catalogue check is the live drift detector.
 - **On-chain-truth boundary** and **chain-access layering** — N/A (no chain involvement).
-- **Deployment readiness** — Section D, kept current.
+- **Deployment readiness** — Section D, kept current. The 2026-10-22 boxes marked "applied: see log" are authored and verifiable only by the cluster apply.
 - **Pre-v0.2 policy:** F18–F22 changed behaviour (route allowlist, edge fields, notices) without shims in
   0.1.7 (released and deployed 2026-10-18). Consumers: joxit's nginx forwards only `/v2`, which is what the allowlist
   admits; nothing else calls the proxy except `platform-probe` (`/v2/_catalog`).
@@ -1198,7 +1358,8 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 6. The proxy MUST remove hop-by-hop and `Connection`-named fields and cookies, and MUST NOT pass
    upstream CORS or `Set-Cookie` to the UI — holds (I5, I17, F14).
 7. The proxy MUST refuse a looped request, bound the forwards in flight and every upstream wait, and
-   cap request headers — holds in code (I18–I20, F15); untested for the deadlines and header cap (F20).
+   cap request headers — holds (I18–I20, F15), the deadlines, bound and header cap tested (F20) and the
+   bound's behaviour under overload measured (F20, 2026-10-22).
 8. The proxy MUST forward only listed routes with a validated path — holds (I10, F18).
 9. Failures MUST map to fixed `502`/`503`/`508`/`404`/`400` bodies with no upstream detail in responses
    or default logs — holds for forwards and for the token fetch (I21, F16, F17).
@@ -1253,7 +1414,7 @@ verify` pinned to the workflow, F12).
 | PX-M5 | yes (header read, idle, header size, in-flight, dial, response-header; the deadlines, bound and header cap are tested; the 10 s header-read timeout is pinned only by value) | F15, F20 |
 | PX-M6 | yes for forwards and for the token fetch | F16, F17 |
 | PX-M7 | N/A (no admission state) | — |
-| PX-M8 | N/A for the upstream (the registry is its own gate); the proxy's door is bounded by NetworkPolicy and Access, with no scheduled negative check | F19 |
+| PX-M8 | N/A for the upstream (the registry is its own gate); the proxy's door is bounded by a pod-level NetworkPolicy and Access, with a scheduled negative check (authored 2026-10-22, applied: see log; the `host` identity residual is OQ8) | F19 |
 | PX-M9 | yes (invalid configuration fails startup; strict defaults) | F1 |
 
 ## Implementation suggestions (SHOULD / MAY)
@@ -1261,8 +1422,10 @@ verify` pinned to the workflow, F12).
 - **S1** *(done in 0.1.4)* `readOnlyScope` intersects challenge scopes with `{pull, catalog}` before any
   token request and returns `403` locally (F8).
 - **S2** *(done in 0.1.4)* bounded cache with expiry-first eviction and `Flight` single flight (F3).
-- **S3** MAY negatively cache "no access" outcomes per scope for a short TTL, to blunt the remaining
-  unique-name amplification (F3).
+- **S3** *(decided 2026-10-22: not implemented)* MAY negatively cache "no access" outcomes per scope for a
+  short TTL, to blunt the remaining unique-name amplification (F3). Declined: the amplification is bounded and
+  measured (64 in flight, the 200m CPU limit, nginx's 20 r/s per visitor) and a negative cache adds state and a
+  staleness window for no needed gain; see F3.
 - **S4** *(done in 0.1.7)* `CLIENT_SECRET_FILE` is re-read when the token service answers `401`; rotation is
   restart-free (F10).
 - **S5** *(done in 0.1.7)* the token-fetch failure is logged by class (`token.FailureClass`), not by error
@@ -1273,14 +1436,15 @@ verify` pinned to the workflow, F12).
   purpose (F18).
 - **S7** *(done in 0.1.7)* the deadlines are fields of the handler's limits; stalled-upstream, dial,
   slow-body, in-flight-bound, `431` header-cap and credentialed-redirect tests exist (F20, F4).
-- **S8** SHOULD narrow `:8181` in `networkpolicy.yaml` to the `registry-ui` pod (plus platform-probe) and
-  add a scheduled negative probe (F19).
-- **S9** SHOULD drop `registry:push` from the `registry-browser` client registration (F21).
+- **S8** *(done in the manifests 2026-10-22, applied: see log)* `:8181` is narrowed in `networkpolicy.yaml` to
+  the `registry-ui` pod and the platform-probe pod, and a scheduled negative probe exists (F19).
+- **S9** *(done in the manifest 2026-10-22, applied: see log)* `registry:push` is dropped from the
+  `registry-browser` client registration (F21).
 - **S10** *(done in 0.1.7, except the base manifest tag in `k8s/`)* transport and rotation text in
   SECURITY.md, the README `cosign verify` pinned to the publish workflow, licence notices in
   `/usr/share/doc/registry-auth-proxy/`, the README build example corrected, `docs/` committed (F5, F10, F12,
   F22).
-- **S11** SHOULD, in the platform repository: list `registry-auth-proxy-secret` in `SECRETS.md`, name it in
+- **S11** *(done by 2026-10-22: `SECRETS.md`, `docs/auth/OPERATIONS.md` and the base tag)* SHOULD, in the platform repository: list `registry-auth-proxy-secret` in `SECRETS.md`, name it in
   `docs/auth/OPERATIONS.md` "Rotate a client secret" (update it before the Job; restart only as the
   fallback), bump or placeholder the tag `0.1.1` in `k8s/base/registry/auth-proxy/deployment.yaml` (F10,
   F12).
@@ -1290,13 +1454,14 @@ verify` pinned to the workflow, F12).
 1. **OQ1** *(baseline OQ1)* NetworkPolicy enforcement and the transport path for proxy ↔ token service.
    Facts recorded: mutual authentication is not run (decision D18) and WireGuard covers only inter-node
    traffic (F5); a default-deny policy exists but admits whole namespaces to `:8181` (F19). SECURITY.md
-   now names the manifest and the whole-namespace admission (0.1.7). Open: should `:8181` be narrowed to
-   the `registry-ui` pod (plus `platform-probe`)? Recommendation: yes — a platform change, S8; no
-   product decision is involved.
+   now names the manifest and the whole-namespace admission (0.1.7). **Decided 2026-10-22:** yes, `:8181` is
+   narrowed to exactly the `registry-ui` and `platform-probe` pods and checked on a schedule (F19, S8;
+   authored, applied: see log). No product decision was involved.
 2. **OQ2** *(baseline OQ2)* Cache growth. (Decided 2026-10-08, 0.1.4: a fixed bound of 512 entries with
    expiry-first eviction and single flight; no per-client limit in the proxy — the per-visitor limit is
-   nginx's — see F3.) Open remainder: is the unique-name amplification acceptable without a negative
-   cache (S3)?
+   nginx's — see F3.) **Decided 2026-10-22:** the unique-name amplification is acceptable without a negative
+   cache (S3): it is bounded by the in-flight cap, the pod's CPU limit and nginx's per-visitor limit, and the
+   cost is measured (F3, F20).
 3. **OQ3** *(baseline OQ3)* `%2F` in repository names. (Decided 2026-10-18, 0.1.7: an encoded slash
    decodes to `/`, which is the legal hierarchy separator of a repository name; `Route` validates the
    decoded path against the name grammar and forwards exactly what it checked, so nothing else can ride
@@ -1306,14 +1471,28 @@ verify` pinned to the workflow, F12).
 5. **OQ5** *(baseline OQ5)* `go.mod` 1.26.6 vs the toolchain. (Decided 2026-10-09, 0.1.5: `go.mod`
    names `toolchain go1.26.9`, the builder is pinned to that patch and the Dockerfile fails on a
    mismatch — see F9.)
-6. **OQ6** Is joxit deployed with image deletion enabled? The `registry-ui` manifest sets
-   `DELETE_IMAGES: "true"`, so the UI offers deletion that the read-only proxy now refuses with `405`
-   (F8). Should the toggle be turned off so the UI stops offering it, or is deletion to return through
-   a separate, authenticated path?
+6. **OQ6** Is joxit deployed with image deletion enabled? The `registry-ui` manifest set
+   `DELETE_IMAGES: "true"`, so the UI offered deletion that the read-only proxy refuses with `405` (F8).
+   **Decided 2026-10-22:** turn the toggle off (`"false"`, authored, applied: see log) so the UI stops
+   offering it; the proxy's `405` stays as the enforcement and is pinned through the wired server
+   (`TestWiredDeleteIsRefused`). Deletion, if it is ever wanted, returns through a separate authenticated
+   path, which is a product decision outside this audit.
 7. **OQ7** Should the Hydra `registry-browser` client lose its `registry:push` scope now (S9, F21), or
-   stay aligned with the other clients until the next client-setup change? Recommendation: drop it at the
-   next client-setup change; three layers withhold push today, so there is no urgency. A platform
-   manifest (`k8s/base/auth/jobs/hydra-client-setup.yaml`), not edited here.
+   stay aligned with the other clients until the next client-setup change? **Decided 2026-10-22:** drop it
+   now; the registration is `registry:pull registry:catalog` (authored in
+   `k8s/base/auth/jobs/hydra-client-setup.yaml`, applied: see log).
+8. **OQ8** *(new 2026-10-22)* Should node-level traffic (Cilium's `host` identity: the node's processes and
+   `hostNetwork` pods such as the ingress controller) be denied to the proxy as well? The pod-level policy
+   cannot do it, and by default Cilium lets the host reach local pods (kubelet probes need that). Options:
+   (a) accept it on a one-node cluster where the host already holds every Secret (recommended for now); (b)
+   Cilium's host firewall with a policy that admits only the kubelet and the needed callers, which is a
+   cluster-wide change with its own lock-out risk. Confirm the current setting with
+   `kubectl -n kube-system exec ds/cilium -- cilium-dbg config | grep -i allowlocalhost`. Not decided here.
+9. **OQ9** *(new 2026-10-22)* How should a failed origin-lock probe reach the operator? Today it is a failed
+   Job and `kube_job_status_failed` in VictoriaMetrics; platform-probe checks HTTP URLs only, so the status page
+   cannot show it without a verdict endpoint. Options: (a) an alert rule on `kube_job_status_failed{job_name=~"origin-lock-probe-.*"}`
+   (recommended; needs the platform's alerting path, not examined here); (b) a tiny in-cluster endpoint that
+   serves the last verdict for platform-probe to read. Left open: it is a platform design choice.
 
 ## Risks
 
@@ -1323,12 +1502,19 @@ verify` pinned to the workflow, F12).
   outage ends in `502`/`503` by design, and a rotated secret breaks browsing only until the mounted
   file is refreshed (F10; no restart needed since 0.1.7, but the order of the rotation steps matters).
 - **Plaintext hop:** proxy ↔ token-service traffic is in-cluster HTTP on one node with no mutual
-  authentication; a hostile pod in an admitted namespace is bounded only by NetworkPolicy (F5, F19);
+  authentication; a hostile pod is bounded by NetworkPolicy (F5, F19; `:8181` admits two pods once the
+  2026-10-22 manifests are applied) and the hop is accepted until a second node joins (F5);
   `SECURITY.md` states this since 0.1.7.
+- **Host identity:** node-level processes and `hostNetwork` pods are not constrained by the pod-level
+  lock (F19, OQ8).
+- **Probe blind spot:** the negative check proves a drop from two pod vantages and cannot prove the allowed
+  path; and a failed run is not yet surfaced beyond the Job (OQ9).
 - **Supply-chain mutability:** the image depends on the pinned builder, the Go toolchain and the GitHub
   and Sigstore services; registry push tokens are long-lived until the maintainer inventory is done.
-- **Unmeasured limits:** the 64-forward bound, deadlines and header cap are tested for behaviour (F20) but
-  not sized or measured under load for the plan tier (maintainer, pre-mainnet).
+- **Limits measured on a stub:** the load numbers (F20) come from a stub registry and token service on one
+  4-CPU host; the live registry and token service are slower than the stubs, which lowers throughput and
+  does not raise the proxy's own CPU or memory per request. Re-run the harness after any change to the
+  forwarding path.
 - **Route allowlist drift:** a UI or registry upgrade that adds a read route (joxit 2.6.0 uses the five
   shapes in F18) would see `404` until `routeRules` is extended; the platform-probe catalogue check and
   the registry-ui itself would show it at once.
@@ -1431,6 +1617,31 @@ verify` pinned to the workflow, F12).
 
 - 2026-10-20 — image build moved off QEMU in 0.1.8 (commit 5a1bd7e): the builder stage is `FROM --platform=$BUILDPLATFORM` and cross-compiles with `GOOS=$TARGETOS GOARCH=$TARGETARCH` (no default for either; the `RUN` aborts if one is empty; a `go version -m` step asserts the binary's `GOARCH` equals the target); `docker-publish.yml` has no `docker/setup-qemu-action` step, so no privileged binfmt step runs in the release. Proof with rootless podman (builder pinned by digest, no binfmt handler registered): the amd64 image built from the 0.1.7 sources equals the published 0.1.7 in every file; the arm64 image differs by design (F23). New: F23 RESOLVED (the published arm64 image held an x86-64 binary; the cluster is amd64, so nothing deployed was affected). Checks: `go vet`, `go test -race` on go1.26.9, `scripts/check-image-notices.sh` with podman where the repo has it. No other disposition changed.
 
+- 2026-10-22 — platform, load and toolchain pass (0.1.9, local commit; manifests authored and rendered, **not
+  applied; no cluster was contacted**). Toolchain `GOTOOLCHAIN=go1.26.10`.
+  - **Authored in `k8s/` (applied: see log; each fills in on the apply):** F19/S8/OQ1 (NetworkPolicy narrowed to
+    the `registry-ui` and `platform-probe` pods; `install.sh` smoke test moved into the `registry-ui` pod), F19
+    remainder (hourly negative-check CronJobs in `registry` and `origin-lock-test`, `docs/networking/ORIGIN_LOCK.md`),
+    F21/S9/OQ7 (`registry:push` removed from the `registry-browser` registration), OQ6 (`DELETE_IMAGES: "false"`),
+    F20 remainder (resources 20m/16Mi and 200m/64Mi from the load test), F12 (base image tags follow
+    `config/images.yaml`).
+  - **Done in this repository:** `internal/loadtest` harness (build tag `load`) and its numbers (F20);
+    `TestWiredDeleteIsRefused` (F8, OQ6); **F24** found and RESOLVED (`govulncheck`: GO-2026-6809 on go1.26.9;
+    toolchain and builder to 1.26.10, 0.1.9, commit pending); SECURITY.md NetworkPolicy text and AGENTS.md updated.
+  - **Decided (recorded, no code):** OQ2 and S3 (no negative cache), F3 residual accepted, F5 accepted until a
+    second node, F11 multiple-scope by design (F11 now RESOLVED), OQ1, OQ6, OQ7. New open questions: OQ8 (host
+    identity), OQ9 (surfacing the probe verdict). F12 RESOLVED (base tag).
+  - **Measured:** `go vet` (also `-tags load`) and `gofmt -l` clean; `go test -race -cover -count=1 ./...` ok —
+    proxy 96.9-97.4%, token 95.5%, config 86.7%, `cmd/server` 38.6%; 60 test functions (143 runs); golangci-lint
+    `0 issues` (also `--build-tags load`); govulncheck `No vulnerabilities found`; rootless podman build with the
+    1.26.10 builder `image notices OK`; `kubectl kustomize` of `k8s/clusters/meddleware-org/registry` and
+    `origin-lock-test`; load runs as in F20.
+  - **Totals (24):** 17 RESOLVED (F1, F2, F4, F7, F8, F9, F11, F12, F14, F15, F16, F17, F18, F20, F22, F23, F24), 5
+    MITIGATED (F3, F5, F10, F19, F21), 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive (F6, F13).
+  - **Not run / not mine:** the cluster apply and the in-cluster behaviour of the policy and the probes; the live
+    Hydra re-run; the status-page wiring (OQ9); the rotation rehearsal and the credential inventory (maintainer);
+    external review. Other Go services pinned to go1.26.9 are probably affected by F24 and were not checked.
+
 ## Pre-save consistency checklist (this pass)
 
 - [x] Section A ↔ findings: every row HOLDS (2026-10-18: I10, I20, I21 now cite F18, F20, F17 as resolved;
@@ -1438,8 +1649,8 @@ verify` pinned to the workflow, F12).
 - [x] Finding header ↔ body: consistent (original 2026-10-03 text kept as history under each header, the
   remediation paragraph states what was done).
 - [x] Template line: base + GO + IMG + AUTH + PROXY at the registry dates (2026-10-08); untriggered lenses named.
-- [x] Corpus IDs preserved (F1–F13, OQ1–OQ6); new IDs F14–F23 / OQ7 (F23 found 2026-10-20).
+- [x] Corpus IDs preserved (F1–F13, OQ1–OQ6); new IDs F14–F24 / OQ7–OQ9 (F23 found 2026-10-20, F24 and OQ8–OQ9 2026-10-22).
 - [x] Section D ↔ dispositions (unticked items name their gate: pre-mainnet or maintainer).
-- [x] Executive summary ↔ dispositions and ceiling (Medium; realised Low): 14 RESOLVED, 7 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive = 23.
-- [x] C.1 counts measured 2026-10-18 (0.1.7 tree).
-- [x] Re-verification log entry added (2026-10-20: F23).
+- [x] Executive summary ↔ dispositions and ceiling (Medium; realised Low): 17 RESOLVED, 5 MITIGATED, 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive = 24.
+- [x] C.1 counts measured 2026-10-22 (0.1.9 tree).
+- [x] Re-verification log entry added (2026-10-22: platform, load and toolchain pass; F24).

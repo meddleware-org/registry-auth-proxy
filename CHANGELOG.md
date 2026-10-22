@@ -5,6 +5,30 @@ All notable changes to registry-auth-proxy are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-10-22
+
+### Security
+
+- **Go toolchain 1.26.10.** `govulncheck` (v1.8.0) reports GO-2026-6809 (distrusted intermediate certificates
+  in `crypto/x509`, fixed in 1.26.10) as reachable from `Handler.ServeHTTP` on the 1.26.9 stdlib. `go.mod` now
+  names `toolchain go1.26.10` and the Dockerfile builder is `golang:1.26.10-bookworm` pinned by digest
+  (`sha256:632dff73…a21af`; the method reproduces the 1.26.9 pin `sha256:d9c68c2c…641453c` from the same
+  registry). The Dockerfile's guard that the builder's `go version` equals the `go.mod` toolchain passes
+  (`scripts/check-image-notices.sh` under rootless podman: `image notices OK`). No source change.
+
+### Added
+
+- **Load harness** (`internal/loadtest`, build tag `load`; test code only, not built into the image and not run
+  by `go test ./...`). It builds the binary, runs it as its own process against a stub registry and token
+  service, and reports requests/s, p50/p99, the 200/503 mix, CPU per request and peak resident memory at
+  increasing concurrency (cache hit with and without keep-alive, upstream latency, 64 MiB blob streams, a storm
+  of never-seen repository names), optionally under a systemd-scope CPU and memory limit. The numbers and the
+  resource sizing they led to are in the audit (F20).
+- `TestWiredDeleteIsRefused`: through the wired server, `DELETE` on the paths joxit sends when image deletion is
+  enabled (manifest by digest and by tag, blob, catalog), with and without a stale `Authorization`, is `405` with
+  `Allow: GET, HEAD` and reaches neither the registry nor the token service; the `HEAD` that precedes a UI delete
+  is still forwarded (audit F8, OQ6).
+
 ## [0.1.8] - 2026-10-20
 
 ### Changed

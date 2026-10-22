@@ -102,6 +102,15 @@ curl -s http://localhost:8181/v2/_catalog
 curl -s http://localhost:8181/v2/<repo>/tags/list
 ```
 
+## Load harness
+
+`internal/loadtest` (build tag `load`, test code only; not built into the image or run by `go test ./...`)
+builds the binary, runs it as its own process against a stub registry and token service, and drives it at
+increasing concurrency, reporting requests/s, p50/p99, the 200/503 mix, CPU per request and peak resident
+memory. `LOAD_CPU_QUOTA=20% LOAD_MEM_MAX=128M` runs the proxy in a systemd user scope with a container-like
+limit. The recipe and the environment variables are in the header of `load_test.go`; the audit (F20)
+records the numbers behind the manifest's resources.
+
 ## Scope prediction
 
 Prediction is a cache-key optimisation, not an authorisation decision. It maps read
