@@ -1308,7 +1308,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 - [x] F5's platform transport cited in SECURITY.md; rotation procedure documented (F5, F10, F12) — `SECURITY.md` "Transport to the token service and the registry" (decision D18) and "Client-secret rotation and compromise", 0.1.7, commit `de46a96`; the rotation rehearsal is the maintainer line below
 - [x] README `cosign verify` pinned to the publish workflow; licence notices shipped in the image; `docs/` committed (F12, F22) — README regexp pinned to `docker-publish.yml@refs/tags/v*`; notices in `/usr/share/doc/registry-auth-proxy/` with the `image` CI job (`scripts/check-image-notices.sh`, `image notices OK` under rootless podman); `docs/` committed with the 0.1.7 commit (commit `de46a96`)
 - [ ] key rotation with overlap rehearsed; compromise procedure documented for the `registry-browser` secret (F10) — the compromise procedure is documented (`SECURITY.md`, 0.1.7) and rotation is restart-free (`TestSecretRotationWithoutRestart`); the rehearsal against the live cluster, a cadence and a last-rotation record are maintainer tasks
-- [x] the negative origin check runs on a schedule (F19) — authored 2026-10-22, applied: see log: hourly CronJobs `origin-lock-probe` in `registry` (`:23`) and `origin-lock-test` (`:41`); a failure is a failed Job and `kube_job_status_failed` (status-page wiring is a follow-up, OQ9)
+- [x] the negative origin check runs on a schedule (F19) — authored 2026-10-22, applied: see log: hourly CronJobs `origin-lock-probe` in `registry` (`:23`) and `origin-lock-test` (`:41`); a failure is a failed Job and `kube_job_status_failed` (status-ui wiring is a follow-up, OQ9)
 - [x] deadline and header-cap tests (F20) — `limits_test.go`, `dial_linux_test.go`, `cmd/server/main_test.go`; 0.1.7, commit `de46a96`
 - [x] standard library free of known reachable advisories at release (F24) — govulncheck `No vulnerabilities found` on go1.26.10 (0.1.9, commit 81fa387); the 0.1.9 release is the orchestrator's
 - [x] limits sized for the plan tier and measured under load (F20 remainder) — measured 2026-10-22 (`internal/loadtest`, numbers in F20); resources resized to 20m/16Mi and 200m/64Mi, authored, applied: see log; nginx limit unchanged, Cloudflare free-plan arithmetic recorded
@@ -1636,7 +1636,7 @@ verify` pinned to the workflow, F12).
   - **Totals (24):** 17 RESOLVED (F1, F2, F4, F7, F8, F9, F11, F12, F14, F15, F16, F17, F18, F20, F22, F23, F24), 5
     MITIGATED (F3, F5, F10, F19, F21), 0 ACCEPTED-RISK, 0 DEFERRED, 2 Positive (F6, F13).
   - **Not run / not mine:** the cluster apply and the in-cluster behaviour of the policy and the probes; the live
-    Hydra re-run; the status-page wiring (OQ9); the rotation rehearsal and the credential inventory (maintainer);
+    Hydra re-run; the status-ui wiring (OQ9); the rotation rehearsal and the credential inventory (maintainer);
     external review. Other Go services pinned to go1.26.9 are probably affected by F24 and were not checked.
 
 - 2026-10-22 (audit close-out) — release status; verified, no repository change.
