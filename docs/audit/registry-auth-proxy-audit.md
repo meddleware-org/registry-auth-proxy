@@ -10,7 +10,7 @@
 **Project type:** Go service + container image + credential-injecting reverse proxy (OAuth client-credentials consumer)
 **Template:**
 
-- AUDIT_TEMPLATE.md (2026-10-08)
+- AUDIT_TEMPLATE.md (2026-11-01)
 - AUDIT_TEMPLATE_GO.md (2026-10-08)
 - AUDIT_TEMPLATE_IMG.md (2026-10-08)
 - AUDIT_TEMPLATE_AUTH.md (2026-10-08) — mandatory: names registry-auth-proxy as a "client-credentials
