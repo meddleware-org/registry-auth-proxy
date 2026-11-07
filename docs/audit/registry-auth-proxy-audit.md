@@ -46,7 +46,7 @@ origin-lock rows only).
   and are **authored, rendered with `kubectl kustomize`, and not applied**: every "applied: see log" below is
   filled in by the cluster apply. 0.1.9 (Go 1.26.10, F24; test and tooling additions) was a local commit at that pass; **it is released as `v0.1.9` (2026-10-22, `c54e6d5`; `Publish (Docker)` run 39764223799 succeeded) and pinned in `config/images.yaml` (`0.1.9@sha256:7dbf5093…3cd5`)**; the cluster apply of it is not re-checked by this audit.
 
-**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18 · image build 2026-10-20 (0.1.8) · platform, load and toolchain pass 2026-10-22 (0.1.9) · delta review 2026-11-05 (no finding changed)
+**Review date:** 2026-10-03 (second pass; baseline 2026-09-18) · re-verified 2026-10-09 · fix wave 2026-10-18 · image build 2026-10-20 (0.1.8) · platform, load and toolchain pass 2026-10-22 (0.1.9) · delta review 2026-11-05 (no finding changed) · 2026-11-07 (local re-check)
 **Reviewer:** Internal review
 **Severity ceiling:** Medium.
 
@@ -1643,6 +1643,7 @@ verify` pinned to the workflow, F12).
   - `v0.1.9` = `c54e6d5` is released (publish run 39764223799 succeeded) and pinned in `config/images.yaml` (`0.1.9@sha256:7dbf5093…3cd5`); F24 (Go 1.26.10, GO-2026-6809) is therefore shipped, not a local commit. The F24 text and the 2026-10-22 status bullet were corrected; the sentence "other Go services ... not checked" is replaced by the confirmation that static-server 0.1.11, platform-probe 0.1.9 and registry-token-service 0.1.9 took the same bump (the image scan flags the embedded stdlib version).
   - F12 platform item: the workspace base manifests (`k8s/base/registry/{auth-proxy,token-service}/deployment.yaml`) had drifted to `0.1.8` again; both now read `0.1.9`, the `config/images.yaml` tag. No finding or count changes (17 RESOLVED, 5 MITIGATED, 2 Positive).
 - 2026-11-05 — delta review against the code since the 2026-10-22 close-out (`eb7cb82`): the ADR-0003 rename (an audit-text change only) and the Dependabot Actions bump (`docker/login-action` 4.6.0 → 4.7.0, `oras-project/setup-oras` 2.0.1 → 2.0.2; pinned by commit SHA with a version comment; no `permissions` or trigger change). Ran `go vet ./...`, `go test -race -count=1 ./...` (cmd/server, config, proxy, token pass; the load-test harness has no tests by design) and `govulncheck v1.8.0 ./...` (no vulnerabilities; run on the local Go 1.27.3 standard library — the 1.26.10 toolchain is pinned in `go.mod`, F24). The diff touches only the workflow and this audit — no source — so no finding changed and none was added. Lens check: A11Y (2026-11-01) not triggered — no UI. Base date re-cited to the 2026-11-01 registry (the base gained the A11Y code only). Pin: `config/images.yaml` names 0.1.9; the live digest is compared at the next deploy.
+- 2026-11-07 — mainnet-readiness sweep, local re-check (no code change): `govulncheck ./...` (rebuilt with Go 1.27.3 so it matches the toolchain) reports no vulnerabilities, and `golangci-lint run ./...` (2.15.0, the repository's configuration) reports 0 issues. This closes the "not run locally" rows for the Go checks. No finding changed.
 
 ## Pre-save consistency checklist (this pass)
 
