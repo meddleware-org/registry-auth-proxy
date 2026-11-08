@@ -1313,7 +1313,7 @@ cosign-verified on 2026-10-09; the 0.1.7 digest `sha256:15038201…f097e` is the
 - [x] standard library free of known reachable advisories at release (F24) — govulncheck `No vulnerabilities found` on go1.26.10 (0.1.9, commit 81fa387); the 0.1.9 release is the orchestrator's
 - [x] limits sized for the plan tier and measured under load (F20 remainder) — measured 2026-10-22 (`internal/loadtest`, numbers in F20); resources resized to 20m/16Mi and 200m/64Mi, authored, applied: see log; nginx limit unchanged, Cloudflare free-plan arithmetic recorded
 - [ ] registry credential inventory (scope, holder, rotation date) — maintainer, `OPERATOR_TASKS.md` "Image registry credentials", deferred to launch
-- [ ] external review of the forwarding path — awaiting external review
+- [ ] external review (ADR-0009 gate G4: not a launch gate; covered by redeploy and the audit pass) of the forwarding path — awaiting external review
 
 ---
 
