@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+env:
+  DO_NOT_TRACK: "1"
+  GOTELEMETRY: "off"
+
 jobs:
   lint:
     name: Lint (golangci-lint)
