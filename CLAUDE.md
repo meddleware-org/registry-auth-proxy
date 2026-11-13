@@ -67,13 +67,84 @@ security-critical in the same way as the token service — it only ever holds th
    directly from upstream to joxit. Buffering would break large responses and
    significantly increase memory use.
 
+## Request flow
+
+```text
+Browser -> joxit nginx -> registry-auth-proxy -> Distribution registry
+                               |  ^ (internal, cluster-only)
+                               v  |
+                        registry token service
+
+Per request:
+  0. Method is not GET/HEAD -> 405. Path is not a canonical registry read route -> 404 / 400 (no token, no upstream call).
+  1. Predict scope from the URL path.
+  2. Cache hit  -> forward with the cached Bearer token (no probe).
+  3. Cache miss -> probe upstream unauthenticated.
+       non-401 -> stream back unchanged.
+       401     -> parse the WWW-Authenticate challenge (quote-aware); scope not pull/catalog -> 403, no token request;
+                  GET token-service /token (Basic auth; one request shared by concurrent misses; on a 401 the secret file is
+                  re-read once and, if changed, the request retried); cache the token under the ISSUED scope only
+                  (expiry - refresh margin; 512-entry bound); retry with the Bearer token.
+  4. Still 401 after a token was attached -> remap to 403 (no login dialog).
+```
+
+Scope prediction is a cache-key optimisation, not an authorisation decision: a mispredict costs at most an unnecessary probe, and
+a token is cached only under the scope it was issued for, so a mispredicted key can never be served another scope's token.
+
+## Layout, configuration and commands
+
+```text
+cmd/server/main.go            HTTP server, routing, graceful shutdown, -healthcheck
+internal/config/config.go     env config; client secret loaded from CLIENT_SECRET_FILE
+internal/proxy/handler.go     reverse proxy: method allowlist, probe/retry, hop-by-hop stripping, 401->403 remap
+internal/proxy/challenge.go   quote-aware Bearer challenge parser; read-only scope filter
+internal/proxy/scope.go       route allowlist (`Route`) and OCI scope prediction
+internal/token/cache.go       thread-safe, bounded per-scope token cache (margin-based expiry)
+internal/token/flight.go      collapses concurrent token fetches for one scope into one request
+internal/token/fetcher.go     fetches tokens from the internal token service (Basic auth)
+internal/loadtest/            load harness (build tag `load`, test code only; not built into the image or run by `go test ./...`)
+```
+
+Endpoints: `GET /healthz` (liveness/readiness, `200 {"status":"ok"}`), `/v2/...` read routes proxied to `UPSTREAM_URL`, anything else
+`404` / `400`.
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `PORT` | no | `8181` | HTTP listen port |
+| `UPSTREAM_URL` | yes | none | Distribution registry base URL |
+| `TOKEN_ENDPOINT` | yes | none | Token service `GET /token` URL (internal) |
+| `CLIENT_ID` | no | `registry-browser` | Hydra `client_id` for Basic auth to the token service |
+| `CLIENT_SECRET_FILE` | yes | none | File containing the client secret (mounted from a Secret) |
+| `TOKEN_REFRESH_MARGIN` | no | `30s` | Evict cached tokens this early before expiry |
+| `LOG_LEVEL` | no | `info` | `debug\|info\|warn\|error` |
+
+```bash
+go build -o auth-proxy ./cmd/server
+PORT=8181 UPSTREAM_URL=http://localhost:5000 TOKEN_ENDPOINT=http://localhost:8080/token \
+  CLIENT_ID=registry-browser CLIENT_SECRET_FILE=./client-secret ./auth-proxy
+go test -race ./...
+curl -s http://localhost:8181/v2/_catalog          # end-to-end smoke: browse with no credentials
+docker build --build-arg VERSION=dev -t registry-auth-proxy:dev .
+sh scripts/check-image-notices.sh                  # CONTAINER_CLI=podman for rootless podman
+```
+
+Tests are standard-library `testing` only (route allowlist, field policy and deadlines against stalling local servers, secret
+re-read, header cap, wiring, rotation end to end).
+
+Load harness: `internal/loadtest` builds the binary, runs it as its own process against a stub registry and token service, and drives
+it at increasing concurrency (requests/s, p50/p99, the 200/503 mix, CPU per request, peak resident memory).
+`LOAD_CPU_QUOTA=20% LOAD_MEM_MAX=128M` runs it in a systemd user scope with a container-like limit; the recipe is in the header of
+`load_test.go`.
+
+Known limitation (intentional): no server read/write timeout. `ReadHeaderTimeout` (10 s), `IdleTimeout` (120 s) and the 32 KiB header
+cap are set so large blob downloads stream without being cut off; the token fetcher has its own 10 s timeout.
+
 ## Code style
 
 - Match the pattern in `registry-token-service/cmd/server/main.go`: no global state,
   structured logging via `log/slog`, graceful shutdown, `envOr` for optional config.
 - Keep `cmd/server/main.go` thin — routing and server setup only.
-- Token cache lives in `internal/token/cache.go`; token fetching in `internal/token/fetcher.go`.
-- Proxy logic (401 intercept, retry, route allowlist and scope prediction) lives in `internal/proxy/`.
+- Proxy logic (401 intercept, retry, route allowlist and scope prediction) lives in `internal/proxy/`; the token cache and fetcher in `internal/token/`.
 - `scripts/third-party-licenses.sh` and `scripts/check-image-notices.sh` produce and check the licence
   notices shipped in the image (`/usr/share/doc/registry-auth-proxy/`); CI runs the check.
 
