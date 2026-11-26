@@ -1,3 +1,5 @@
+// Tests for the route allowlist: every allowed read route, and every kind of path that must be refused.
+
 package proxy
 
 import (
@@ -5,14 +7,18 @@ import (
 	"testing"
 )
 
+// TestPredictScope checks each allowed route maps to its pull or catalog scope, and that a path outside the grammars or not canonical is refused.
 func TestPredictScope(t *testing.T) {
+	// Each row: a case name, the request path and the scope PredictScope must return (empty when no scope applies).
 	tests := []struct {
 		name string
 		path string
 		want string
 	}{
+		// The version check needs no scope.
 		{"ping", "/v2/", ""},
 		{"ping no trailing slash", "/v2", ""},
+		// The catalog and every repository read route map to read-only scopes.
 		{"catalog", "/v2/_catalog", "registry:catalog:*"},
 		{"tags list", "/v2/foo/tags/list", "repository:foo:pull"},
 		{"tags list namespaced", "/v2/meddleware-org/static-server/tags/list", "repository:meddleware-org/static-server:pull"},
@@ -22,7 +28,9 @@ func TestPredictScope(t *testing.T) {
 		{"blob by digest", "/v2/foo/blobs/sha256:abc123", "repository:foo:pull"},
 		{"blob namespaced", "/v2/org/img/blobs/sha256:deadbeef", "repository:org/img:pull"},
 		{"referrers", "/v2/foo/referrers/sha256:abc123", "repository:foo:pull"},
+		// The name grammar allows dots, underscores and runs of dashes.
 		{"name with separators", "/v2/my.org/my_img--x/tags/list", "repository:my.org/my_img--x:pull"},
+		// A repository may be named like a route word: the grammar, not a substring search, decides where the name ends.
 		{"name containing a route word", "/v2/a/blobs/b/manifests/latest", "repository:a/blobs/b:pull"},
 		// Paths that are not allowed routes predict no scope; the handler refuses them before use.
 		{"blob upload", "/v2/foo/blobs/uploads/", ""},
@@ -34,6 +42,7 @@ func TestPredictScope(t *testing.T) {
 		{"dot segment", "/v2/foo/./tags/list", ""},
 	}
 
+	// Run each case as a subtest so a failure names its row.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := PredictScope(tt.path); got != tt.want {

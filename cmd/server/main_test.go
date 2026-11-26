@@ -1,3 +1,6 @@
+// Tests for the proxy's HTTP entry point: the health probe and the request log, and the flow from a registry call through the token fetch to an
+// upstream answer, over httptest servers (no mocks of the proxy itself).
+
 package main
 
 import (
@@ -73,6 +76,7 @@ func TestServerRefusesOversizeHeaders(t *testing.T) {
 	}
 }
 
+// TestHealth checks the probe endpoint answers 200 with the documented body.
 func TestHealth(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handleHealth(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -80,6 +84,7 @@ func TestHealth(t *testing.T) {
 		t.Errorf("healthz: %d %q", rec.Code, rec.Body.String())
 	}
 
+	// A real listener running the health handler; healthCheck dials PORT on the loopback.
 	srv := httptest.NewServer(http.HandlerFunc(handleHealth))
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
@@ -88,6 +93,7 @@ func TestHealth(t *testing.T) {
 		t.Errorf("healthCheck against a healthy server = %d, want 0", code)
 	}
 	srv.Close()
+	// With nothing listening the probe must fail, so the container is restarted.
 	if code := healthCheck(); code != 1 {
 		t.Errorf("healthCheck with nothing listening = %d, want 1", code)
 	}
@@ -108,6 +114,7 @@ func TestSecretRotationWithoutRestart(t *testing.T) {
 	defer registry.Close()
 
 	var accepted atomic.Value
+	// The fake token service accepts the old secret until the test rotates it.
 	accepted.Store("old-secret")
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, pass, ok := r.BasicAuth(); !ok || pass != accepted.Load().(string) {
@@ -124,6 +131,7 @@ func TestSecretRotationWithoutRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The mounted file starts with the old secret, as the Kubernetes Secret volume does.
 	write("old-secret")
 	t.Setenv("UPSTREAM_URL", registry.URL)
 	t.Setenv("TOKEN_ENDPOINT", tokenSrv.URL+"/token")
@@ -133,6 +141,7 @@ func TestSecretRotationWithoutRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The proxy wired exactly as main wires it, on a local listener.
 	proxyURL := serveOn(t, newServer("", newMux(cfg)))
 
 	get := func() (int, string) {
@@ -149,12 +158,14 @@ func TestSecretRotationWithoutRestart(t *testing.T) {
 		t.Fatalf("before the rotation: status %d, want 200", code)
 	}
 
+	// Rotation: the token service now accepts only the new secret, while the file still holds the old one.
 	// Rotation: the token service now accepts only the new secret. Until the mounted file changes the
 	// proxy fails closed.
 	accepted.Store("new-secret")
 	if code, body := get(); code != http.StatusBadGateway || strings.Contains(body, "secret") {
 		t.Fatalf("rotated service, old file: status %d body %q, want a closed 502", code, body)
 	}
+	// The Secret volume updates: the next request must recover with no restart.
 	write("new-secret")
 	if code, body := get(); code != http.StatusOK || strings.Contains(body, "secret") {
 		t.Errorf("after the file changed: status %d body %q, want 200 without a restart", code, body)
@@ -190,6 +201,7 @@ func TestWiredRoutePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := serveOn(t, newServer("", newMux(cfg)))
+	// Do not follow redirects: the mux's 307 for a non-canonical path is part of what is asserted.
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	for path, want := range map[string]int{

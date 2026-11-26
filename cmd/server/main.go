@@ -43,6 +43,7 @@ import (
 // -ldflags "-X main.version=...". It defaults to "dev" for local builds.
 var version = "dev"
 
+// main wires the proxy: the -healthcheck mode, validated configuration, the token cache and fetcher, the HTTP server and a graceful shutdown.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
 		os.Exit(healthCheck())
@@ -140,6 +141,7 @@ func healthCheck() int {
 	return 0
 }
 
+// handleHealth answers 200 whenever the process is up; it reflects neither the registry nor the token service.
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -154,11 +156,13 @@ type responseWriter struct {
 	code int
 }
 
+// WriteHeader records the status code before passing it on, so the request log can report it.
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.code = code
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// logRequest logs one line per request at debug level: method, path (never the query string), status and elapsed time.
 func logRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rw := &responseWriter{ResponseWriter: w, code: http.StatusOK}

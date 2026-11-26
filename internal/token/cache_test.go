@@ -1,3 +1,5 @@
+// Tests for the token cache: storage, the refresh margin, expiry, the size bound and eviction.
+
 package token
 
 import (
@@ -6,6 +8,7 @@ import (
 	"time"
 )
 
+// TestCacheSetGet checks a stored token is returned for its scope.
 func TestCacheSetGet(t *testing.T) {
 	c := NewCache(30 * time.Second)
 
@@ -26,6 +29,7 @@ func TestCacheSetGet(t *testing.T) {
 	}
 }
 
+// TestCacheMarginExpiry checks a token is treated as expired once it is inside the refresh margin, before it really expires.
 func TestCacheMarginExpiry(t *testing.T) {
 	// Margin larger than the token lifetime means the entry is already expired.
 	c := NewCache(1 * time.Minute)
@@ -35,6 +39,7 @@ func TestCacheMarginExpiry(t *testing.T) {
 	}
 }
 
+// TestCacheEmptyScopeKey checks the empty scope (the /v2/ version check) is a valid cache key.
 func TestCacheEmptyScopeKey(t *testing.T) {
 	// The empty scope (the /v2/ ping) is a valid cache key.
 	c := NewCache(0)
@@ -45,6 +50,7 @@ func TestCacheEmptyScopeKey(t *testing.T) {
 	}
 }
 
+// TestCacheExpiredEntryDeleted checks reading an expired entry removes it.
 func TestCacheExpiredEntryDeleted(t *testing.T) {
 	// An entry that expires after it was stored is deleted on the Get miss, not kept forever.
 	c := NewCache(0)
@@ -61,6 +67,7 @@ func TestCacheExpiredEntryDeleted(t *testing.T) {
 	}
 }
 
+// TestCacheSkipsTokenAlreadyInsideMargin checks a token that arrives already inside the margin is not stored.
 func TestCacheSkipsTokenAlreadyInsideMargin(t *testing.T) {
 	c := NewCache(time.Minute)
 	c.Set("s", "tok", time.Now().Add(10*time.Second))
@@ -69,6 +76,7 @@ func TestCacheSkipsTokenAlreadyInsideMargin(t *testing.T) {
 	}
 }
 
+// TestCacheIsBounded checks the cache never holds more than its maximum number of entries.
 func TestCacheIsBounded(t *testing.T) {
 	c := NewCache(0)
 	c.max = 4
@@ -88,6 +96,7 @@ func TestCacheIsBounded(t *testing.T) {
 	}
 }
 
+// TestCacheEvictionKeepsEmptyScope checks eviction does not drop the empty-scope entry the version check depends on.
 func TestCacheEvictionKeepsEmptyScope(t *testing.T) {
 	// The empty scope is a real key; eviction must treat it like any other.
 	c := NewCache(0)
@@ -104,6 +113,7 @@ func TestCacheEvictionKeepsEmptyScope(t *testing.T) {
 	}
 }
 
+// TestCacheDelete checks an entry can be removed, and removing an absent one is harmless.
 func TestCacheDelete(t *testing.T) {
 	c := NewCache(0)
 	c.Set("s", "tok", time.Now().Add(time.Minute))

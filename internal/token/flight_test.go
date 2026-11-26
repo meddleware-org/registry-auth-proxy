@@ -1,3 +1,5 @@
+// Tests for Flight: sharing while in flight, no caching afterwards, and independent keys.
+
 package token
 
 import (
@@ -8,11 +10,13 @@ import (
 	"time"
 )
 
+// TestFlightSharesOneFetch checks concurrent callers for one key share one fetch and all get its result.
 func TestFlightSharesOneFetch(t *testing.T) {
 	var f Flight
 	var runs atomic.Int32
 	release := make(chan struct{})
 	started := make(chan struct{})
+	// The fetch blocks until released, so every caller is in flight at the same time.
 	fn := func() (string, time.Time, error) {
 		if runs.Add(1) == 1 {
 			close(started)
@@ -21,6 +25,7 @@ func TestFlightSharesOneFetch(t *testing.T) {
 		return "tok", time.Unix(100, 0), nil
 	}
 
+	// Eight concurrent callers for one key.
 	var wg sync.WaitGroup
 	results := make([]string, 8)
 	for i := range results {
@@ -30,6 +35,7 @@ func TestFlightSharesOneFetch(t *testing.T) {
 			results[i], _, _ = f.Do("scope", fn)
 		}()
 	}
+	// The first caller has begun the fetch; the others will find it in flight.
 	<-started
 	time.Sleep(50 * time.Millisecond) // let the other callers join the in-flight call
 	close(release)
@@ -45,9 +51,11 @@ func TestFlightSharesOneFetch(t *testing.T) {
 	}
 }
 
+// TestFlightDoesNotCacheResultsOrErrors checks a later call after a fetch finishes runs a new fetch: results and errors are shared only while in flight.
 func TestFlightDoesNotCacheResultsOrErrors(t *testing.T) {
 	var f Flight
 	var runs int
+	// A failing fetch, then a succeeding one: the second must run again, not replay the failure.
 	fail := errors.New("boom")
 	if _, _, err := f.Do("s", func() (string, time.Time, error) { runs++; return "", time.Time{}, fail }); !errors.Is(err, fail) {
 		t.Fatalf("err = %v", err)
@@ -55,11 +63,13 @@ func TestFlightDoesNotCacheResultsOrErrors(t *testing.T) {
 	if _, _, err := f.Do("s", func() (string, time.Time, error) { runs++; return "ok", time.Time{}, nil }); err != nil {
 		t.Fatalf("second call err = %v", err)
 	}
+	// Two sequential calls are two fetches: nothing is cached once a fetch has finished.
 	if runs != 2 {
 		t.Errorf("sequential calls ran fn %d times, want 2", runs)
 	}
 }
 
+// TestFlightKeysAreIndependent checks fetches for different keys run separately.
 func TestFlightKeysAreIndependent(t *testing.T) {
 	var f Flight
 	a, _, _ := f.Do("a", func() (string, time.Time, error) { return "ta", time.Time{}, nil })

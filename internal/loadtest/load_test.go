@@ -41,6 +41,7 @@ import (
 
 // ---- stubs ------------------------------------------------------------------------------------------
 
+// stubRegistry is a local registry double: it answers the probe with 401 and a Bearer challenge, and serves small and large bodies once a token is attached.
 type stubRegistry struct {
 	srv      *httptest.Server
 	latency  time.Duration
@@ -50,6 +51,7 @@ type stubRegistry struct {
 	authed   atomic.Int64
 }
 
+// scopeFor derives the OCI scope a registry path needs, as the proxy itself predicts it.
 func scopeFor(path string) string {
 	if path == "/v2/_catalog" {
 		return "registry:catalog:*"
@@ -64,6 +66,7 @@ func scopeFor(path string) string {
 	return "repository:" + name + ":pull"
 }
 
+// newStubRegistry starts the registry double with an optional per-request latency and a blob size to stream.
 func newStubRegistry(latency time.Duration, blobSize int64) *stubRegistry {
 	s := &stubRegistry{latency: latency, small: []byte(strings.Repeat("x", 1024)), blobSize: blobSize}
 	zeros := make([]byte, 64<<10)
@@ -100,12 +103,14 @@ func newStubRegistry(latency time.Duration, blobSize int64) *stubRegistry {
 	return s
 }
 
+// stubTokenService is a local token-service double: it counts calls and issues a fixed 300-second token to a client that sends Basic credentials.
 type stubTokenService struct {
 	srv     *httptest.Server
 	latency time.Duration
 	calls   atomic.Int64
 }
 
+// newStubTokenService starts the token-service double with an optional latency.
 func newStubTokenService(latency time.Duration) *stubTokenService {
 	s := &stubTokenService{latency: latency}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -125,12 +130,14 @@ func newStubTokenService(latency time.Duration) *stubTokenService {
 
 // ---- the proxy process -----------------------------------------------------------------------------
 
+// The proxy binary is built once per test run and shared by every scenario.
 var (
 	buildOnce sync.Once
 	binPath   string
 	buildErr  error
 )
 
+// buildProxy compiles the real proxy binary (once) and returns its path, so the load runs against the shipped code, not a test build.
 func buildProxy(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
@@ -152,11 +159,13 @@ func buildProxy(t *testing.T) string {
 	return binPath
 }
 
+// proxyProc is a running proxy process and the address it listens on.
 type proxyProc struct {
 	cmd  *exec.Cmd
 	addr string
 }
 
+// startProxy launches the proxy binary on a free loopback port against the given upstream and token endpoint, and waits until it is healthy.
 func startProxy(t *testing.T, upstream, tokenEndpoint string) *proxyProc {
 	t.Helper()
 	bin := buildProxy(t)
@@ -251,6 +260,7 @@ func (p *proxyProc) status(t *testing.T, key string) float64 {
 
 // ---- the load generator ----------------------------------------------------------------------------
 
+// step is the measured result of one load step: concurrency, duration, counts by outcome, bytes, sorted latencies and the proxy's CPU seconds.
 type step struct {
 	conc                int
 	dur                 time.Duration
@@ -260,8 +270,10 @@ type step struct {
 	cpuSec              float64
 }
 
+// rps is the served requests (200, 503 and other statuses alike) per second of the step.
 func (s *step) rps() float64 { return float64(s.ok+s.busy+s.other) / s.dur.Seconds() }
 
+// pct returns the latency at quantile q of the sorted samples (0 when there are none).
 func (s *step) pct(q float64) time.Duration {
 	if len(s.lat) == 0 {
 		return 0
@@ -322,6 +334,7 @@ func drive(t *testing.T, p *proxyProc, conc int, dur time.Duration, keepalive bo
 	return res
 }
 
+// report logs one line for a step: throughput, outcome counts, latency percentiles, CPU per request and memory, read from the proxy process.
 func report(t *testing.T, p *proxyProc, s *step, extra string) {
 	t.Helper()
 	served := s.ok + s.busy + s.other
@@ -336,6 +349,7 @@ func report(t *testing.T, p *proxyProc, s *step, extra string) {
 		float64(s.bytes)/(1<<20)/s.dur.Seconds(), extra)
 }
 
+// seconds is how long each step runs: LOAD_SECONDS, else four.
 func seconds() time.Duration {
 	n, _ := strconv.Atoi(os.Getenv("LOAD_SECONDS"))
 	if n <= 0 {
@@ -344,6 +358,7 @@ func seconds() time.Duration {
 	return time.Duration(n) * time.Second
 }
 
+// want reports whether a scenario is selected: LOAD_SCENARIO names one, empty runs all.
 func want(name string) bool {
 	s := os.Getenv("LOAD_SCENARIO")
 	return s == "" || s == name
@@ -429,6 +444,7 @@ func runStorm(t *testing.T) {
 	})
 }
 
+// TestLoad is the load harness: it runs each scenario at rising concurrency and logs the numbers; it is skipped with -short and asserts nothing about speed.
 func TestLoad(t *testing.T) {
 	if testing.Short() {
 		t.Skip("load harness")

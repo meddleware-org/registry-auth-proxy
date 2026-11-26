@@ -1,3 +1,5 @@
+// Tests for configuration loading: required variables, URL validation (and that a rejected URL is never repeated), the secret file, and the refresh margin.
+
 package config
 
 import (
@@ -7,7 +9,9 @@ import (
 	"testing"
 )
 
+// TestValidateHTTPURL checks which values are accepted as an outbound URL: http and https with a host, and nothing else.
 func TestValidateHTTPURL(t *testing.T) {
+	// Addresses the in-cluster deployment really uses, plus a public https one.
 	valid := []string{
 		"http://registry.registry.svc.cluster.local:5000",
 		"https://example.com/token",
@@ -19,6 +23,7 @@ func TestValidateHTTPURL(t *testing.T) {
 		}
 	}
 
+	// Every shape of mistake: empty, no scheme, wrong scheme, opaque, no host, missing scheme.
 	invalid := []string{
 		"",                 // empty
 		"not-a-url",        // no scheme/host
@@ -34,11 +39,13 @@ func TestValidateHTTPURL(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsMalformedUpstreamURL checks Load fails fast on a bad UPSTREAM_URL and accepts a valid in-cluster http one.
 func TestLoadRejectsMalformedUpstreamURL(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "client-secret")
 	if err := os.WriteFile(secret, []byte("s3cr3t"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A helper that sets the three required variables, varying only UPSTREAM_URL.
 	setEnv := func(t *testing.T, upstream string) {
 		t.Setenv("UPSTREAM_URL", upstream)
 		t.Setenv("TOKEN_ENDPOINT", "http://token-service.registry.svc.cluster.local:8080/token")
@@ -60,7 +67,9 @@ func TestLoadRejectsMalformedUpstreamURL(t *testing.T) {
 	})
 }
 
+// TestReadSecret checks the secret file is trimmed, must be non-empty and readable, and that the error names the path and never the content.
 func TestReadSecret(t *testing.T) {
+	// One directory for the secret files of the sub-cases.
 	dir := t.TempDir()
 	write := func(name, content string) string {
 		p := filepath.Join(dir, name)
@@ -90,6 +99,7 @@ func TestReadSecret(t *testing.T) {
 	}
 }
 
+// TestLoadRecordsSecretFile checks Load keeps the secret file path, which the fetcher re-reads after a rotation.
 func TestLoadRecordsSecretFile(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "client-secret")
 	if err := os.WriteFile(secret, []byte("s3cr3t"), 0o600); err != nil {
@@ -104,5 +114,45 @@ func TestLoadRecordsSecretFile(t *testing.T) {
 	}
 	if cfg.SecretFile != secret || cfg.ClientSecret != "s3cr3t" {
 		t.Errorf("SecretFile %q ClientSecret set=%v", cfg.SecretFile, cfg.ClientSecret != "")
+	}
+}
+
+// TestURLErrorsNeverEchoTheValue checks a rejected URL is named by its variable only: values carrying a user name,
+// password, path token and query key (including ones that parse with a secret-looking scheme) must reach no part of
+// the error, which is logged.
+func TestURLErrorsNeverEchoTheValue(t *testing.T) {
+	for _, raw := range []string{
+		"ftp://user:s3cret@host.example/tok3n?key=k3y",
+		"s3cret:pw@host.example",
+		"https://user:s3cret@",
+		"https://us:s3cret@[::1",
+	} {
+		err := validateHTTPURL("UPSTREAM_URL", raw)
+		if err == nil {
+			t.Fatalf("validateHTTPURL(%q): want an error", raw)
+		}
+		for _, part := range []string{"user", "s3cret", "host.example", "tok3n", "k3y", "pw@", "ftp"} {
+			if strings.Contains(err.Error(), part) {
+				t.Errorf("error %q repeats %q", err, part)
+			}
+		}
+		if !strings.Contains(err.Error(), "UPSTREAM_URL") {
+			t.Errorf("error %q does not name the variable", err)
+		}
+	}
+}
+
+// TestLoadRejectsNegativeRefreshMargin checks a negative TOKEN_REFRESH_MARGIN is refused instead of making every token look fresh for longer than it lives.
+func TestLoadRejectsNegativeRefreshMargin(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "client-secret")
+	if err := os.WriteFile(secret, []byte("s3cr3t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UPSTREAM_URL", "http://registry.registry.svc.cluster.local:5000")
+	t.Setenv("TOKEN_ENDPOINT", "http://token-service.registry.svc.cluster.local:8080/token")
+	t.Setenv("CLIENT_SECRET_FILE", secret)
+	t.Setenv("TOKEN_REFRESH_MARGIN", "-5s")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TOKEN_REFRESH_MARGIN") {
+		t.Errorf("Load with a negative margin: got %v, want an error naming TOKEN_REFRESH_MARGIN", err)
 	}
 }

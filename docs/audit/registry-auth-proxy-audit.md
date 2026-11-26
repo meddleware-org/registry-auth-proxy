@@ -17,6 +17,9 @@
   consumer with a per-scope token cache"
 - AUDIT_TEMPLATE_PROXY.md (2026-10-08) — mandatory: names registry-auth-proxy as a "credential-injecting
   proxy for the registry UI"
+- **Added 2026-11-26 (Part B documentation pass):** AUDIT_TEMPLATE_DOCS.md (2026-11-20); AUDIT_TEMPLATE_RFC.md (2026-11-19), ●: HTTP, Basic authentication, the Bearer challenge grammar, the OCI Distribution API;
+  AUDIT_TEMPLATE_IOP.md (2026-11-19), ●: the registry API both sides, the build and release dependencies; AUDIT_TEMPLATE_PRIV.md (2026-11-20), ●: logs, no stored data, no browser storage;
+  AUDIT_TEMPLATE_CONF.md (2026-11-26), ●: seven environment variables and one credential file.
 
 The 2026-09-18 baseline predates the lens set; the PROXY lens is new in this pass (2026-10-09). Not
 triggered: SUI, SUI_CLIENT, SEAL, WALRUS, VUE, TS, RUST, WORKERS, OPS, SITE, and PLATFORM (the project
@@ -1077,6 +1080,70 @@ releases it. Other Go services built on 1.26.9 were flagged the same way, by Tri
 
 ---
 
+### Part B documentation pass (2026-11-26)
+
+Scope: every tracked file read against the workspace's `docs/operations/DOCUMENTATION_STANDARD.md` and annotated (Part B Phase 1, the twenty-third repository, the third of the Go services); the DOCS, RFC, IOP, PRIV and CONF
+lenses applied for the first time. Before and after editing: `go vet` (also with `-tags load`), `go test -race` (62 tests; 96.9 % proxy, 95.5 % token, 89.4 % config, 38.6 % `cmd/server`) and `golangci-lint` 2.15.0
+(0 issues, with the new revive rules). The code changes are F25 and F26 and their tests; everything else is comments, documents and configuration comments. The image build and the notices check were not re-run (no container
+daemon in this sandbox; CI runs them).
+
+#### B.RFC-1 Standards inventory
+
+| Standard | Where | Evidence |
+| --- | --- | --- |
+| HTTP semantics, RFC 9110: methods, `Via` and hop-by-hop fields (§7.6), the `WWW-Authenticate` auth-param grammar with quoted strings (§11.2), `Retry-After` | `handler.go`, `challenge.go` | `TestParseBearerChallenge`, `TestForward_*` |
+| HTTP Basic authentication, RFC 7617: the client credentials sent to the token service | `fetcher.go` `attempt` | `TestFetchSendsCredentialsAndScope` |
+| `508 Loop Detected`, RFC 5842: a request that already carries the proxy's `Via` marker | `handler.go` | `TestForward_LoopIsRefusedBeforeAnyUpstreamCall` |
+| OCI Distribution Specification: the read routes and the name, tag and digest grammars | `scope.go` | `TestRoute`, `TestPredictScope` |
+| Docker registry token authentication (the Bearer challenge's `service` and `scope`, the token response): a registry convention, not an IETF standard | `challenge.go`, `fetcher.go` | recorded as non-final (B.RFC-2) |
+
+**B.RFC-2 Non-final standards:** the registry token-authentication flow is a de facto specification (the one the Distribution registry and the OCI ecosystem implement); it is on the core path and is the reason the proxy exists,
+so it is recorded here rather than avoided. **B.RFC-3 Deviations:** none found.
+
+#### B.IOP Interoperability, portability and exit
+
+- **Portability and exit:** the proxy holds no person's data and no state beyond a token cache; leaving is pointing the registry UI at any registry that speaks the same API.
+- **Open API:** the proxy speaks the OCI Distribution read API on both sides and adds only `GET /healthz`; no special access for our own UI.
+- **Dependencies (exit register):** the `golang` builder image, quay.io, Docker Hub, the self-hosted registry, GitHub Actions, Sigstore, Trivy; all replaceable by a rebuild from source. At run time it calls the registry and the token
+  service the operator names.
+- **Incentives:** no telemetry, no ads, no tracking.
+
+#### B.PRIV Privacy honoured
+
+- **Browser storage:** none (it serves registry API responses; the registry's own `Set-Cookie` fields are dropped, F14).
+- **Logs:** at `debug` one line per request (method, path without the query string, status, elapsed time); at the default `info` level start and stop, and at `warn`/`error` the class of a failure (never an address, a credential or an
+  upstream hostname: F16, F17). The client address is not logged.
+- **Data held:** none about a person. The one credential is the client secret in a mounted Secret file; it is never logged or returned (tested).
+
+#### B.CONF Configuration and values
+
+- **Configuration surface:** `config.Load` (seven environment variables and the secret file; one typed `Config`), documented in the README, `CLAUDE.md` and `.env.example`.
+- **Values that can carry a credential:** `UPSTREAM_URL` and `TOKEN_ENDPOINT` (a URL may carry a user name, password, path token or query key); the secret itself is a file, never an environment variable.
+- **Echo sweep (2026-11-26):** every `fmt.Errorf`, `errors.New` and `slog` call read. The configuration errors for both URLs repeated the value (F25, fixed); the transport and token-service failures are reported by class only (F16,
+  F17); the secret-file errors name the path, never the content.
+- **Validation:** each value is parsed once at start-up and the process exits with a message naming the variable; the refresh margin is now range-checked (F26).
+
+### F25 — A rejected `UPSTREAM_URL` or `TOKEN_ENDPOINT` was repeated in the start-up error
+**Severity:** Low   **Disposition:** RESOLVED (2026-11-26, unreleased)
+**Where:** `internal/config/config.go` `validateHTTPURL`.
+**Issue:** the errors quoted the whole value (`invalid UPSTREAM_URL "…"`, `… got scheme "…" in "…"`, `… must include a host: "…"`), and the parse error quoted it again. A value written as `https://user:password@host/?key=…`,
+or mistyped as `user:password@host` (which parses with `user` as the scheme), put its credential in the container log.
+**Impact:** a credential in a log; small, because the value is operator-typed and the log is the operator's, but the log can be shipped elsewhere. F17 closed the same class for the token endpoint at run time.
+**Remediation / evidence:** the errors name the variable and what is wrong ("must be an http(s) URL", "must include a host", "not a valid URL") and repeat nothing of the value, not even its scheme.
+`TestURLErrorsNeverEchoTheValue` feeds four values carrying a user name, password, path token and query key and asserts none appears.
+
+### F26 — A negative `TOKEN_REFRESH_MARGIN` was accepted
+**Severity:** Info   **Disposition:** RESOLVED (2026-11-26, unreleased)
+**Where:** `internal/config/config.go` `Load`.
+**Issue:** the margin is subtracted from a token's expiry to decide when to refresh, so a negative one made a cached token look valid for longer than the token service said it lived, and the proxy would present an expired token.
+**Remediation / evidence:** `Load` refuses a negative margin with an error naming the variable; `TestLoadRejectsNegativeRefreshMargin`.
+
+### F27 — Documentation drift found by the documentation pass
+**Severity:** Low   **Disposition:** RESOLVED (2026-11-26, unreleased)
+**Where:** `README.md` (the development section sent readers to `AGENTS.md` for the layout, but `AGENTS.md` is a pointer to `CLAUDE.md`), `CHANGELOG.md` (no `Unreleased` section), the tests (eleven files with no header,
+about fifty undocumented declarations), the workflows, `.dockerignore` and `dependabot.yml` (few or no comments); there was no `CONTRIBUTING.md` and no lint that checks doc comments.
+**Remediation / evidence:** the documents and comments are written; `.golangci.yml` turns on revive's `exported`, `package-comments` and `comment-spacings`; `check-docs` for the repository passes.
+
 ## Section A — Invariant verification matrix
 
 | # | Invariant | Enforced at | Proven by | Status |
@@ -1645,6 +1712,10 @@ verify` pinned to the workflow, F12).
 - 2026-11-05 — delta review against the code since the 2026-10-22 close-out (`eb7cb82`): the ADR-0003 rename (an audit-text change only) and the Dependabot Actions bump (`docker/login-action` 4.6.0 → 4.7.0, `oras-project/setup-oras` 2.0.1 → 2.0.2; pinned by commit SHA with a version comment; no `permissions` or trigger change). Ran `go vet ./...`, `go test -race -count=1 ./...` (cmd/server, config, proxy, token pass; the load-test harness has no tests by design) and `govulncheck v1.8.0 ./...` (no vulnerabilities; run on the local Go 1.27.3 standard library — the 1.26.10 toolchain is pinned in `go.mod`, F24). The diff touches only the workflow and this audit — no source — so no finding changed and none was added. Lens check: A11Y (2026-11-01) not triggered — no UI. Base date re-cited to the 2026-11-01 registry (the base gained the A11Y code only). Pin: `config/images.yaml` names 0.1.9; the live digest is compared at the next deploy.
 - 2026-11-07 — mainnet-readiness sweep, local re-check (no code change): `govulncheck ./...` (rebuilt with Go 1.27.3 so it matches the toolchain) reports no vulnerabilities, and `golangci-lint run ./...` (2.15.0, the repository's configuration) reports 0 issues. This closes the "not run locally" rows for the Go checks. No finding changed.
 
+- 2026-11-26 — Part B documentation pass and first application of the DOCS, RFC, IOP, PRIV and CONF lenses (above, "Part B documentation pass"). Baseline before editing: `go vet`, `go test -race` (60 tests). Every tracked file annotated
+  to the documentation standard; `CONTRIBUTING.md` and `.golangci.yml` added; README and CLAUDE.md corrected. Found and fixed **F25** (a rejected URL repeated in the start-up error), **F26** (a negative refresh margin) and
+  **F27** (documentation drift). Re-run after editing: `go vet` (and `-tags load`), `go test -race` (62 tests), golangci-lint 2.15.0 (0 issues). Counts: F1 to F27.
+
 ## Pre-save consistency checklist (this pass)
 
 - [x] Section A ↔ findings: every row HOLDS (2026-10-18: I10, I20, I21 now cite F18, F20, F17 as resolved;
@@ -1658,3 +1729,4 @@ verify` pinned to the workflow, F12).
 - [x] C.1 counts measured 2026-10-22 (0.1.9 tree).
 - [x] Re-verification log entry added (2026-10-22: platform, load and toolchain pass; F24).
 - [x] 2026-10-22 (close-out): F24 and the Deployment status say released; F12 base tag text current; log entry added; counts unchanged.
+- [x] 2026-11-26 (Part B pass): F25 to F27 added with the DOCS, RFC, IOP, PRIV and CONF lenses in the Template line; counts F1 to F27.

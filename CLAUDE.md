@@ -111,12 +111,14 @@ Endpoints: `GET /healthz` (liveness/readiness, `200 {"status":"ok"}`), `/v2/...`
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `PORT` | no | `8181` | HTTP listen port |
-| `UPSTREAM_URL` | yes | none | Distribution registry base URL |
-| `TOKEN_ENDPOINT` | yes | none | Token service `GET /token` URL (internal) |
+| `UPSTREAM_URL` | yes | none | Distribution registry base URL (`http` or `https` with a host; a rejected value is never echoed) |
+| `TOKEN_ENDPOINT` | yes | none | Token service `GET /token` URL (internal; `http` or `https` with a host; a rejected value is never echoed) |
 | `CLIENT_ID` | no | `registry-browser` | Hydra `client_id` for Basic auth to the token service |
 | `CLIENT_SECRET_FILE` | yes | none | File containing the client secret (mounted from a Secret) |
-| `TOKEN_REFRESH_MARGIN` | no | `30s` | Evict cached tokens this early before expiry |
+| `TOKEN_REFRESH_MARGIN` | no | `30s` | Evict cached tokens this early before expiry (a duration, not negative) |
 | `LOG_LEVEL` | no | `info` | `debug\|info\|warn\|error` |
+
+Also in the repository: `.golangci.yml` (the default linters plus revive's `exported`, `package-comments` and `comment-spacings`) and `CONTRIBUTING.md` (how to build, test and propose a change).
 
 ```bash
 go build -o auth-proxy ./cmd/server

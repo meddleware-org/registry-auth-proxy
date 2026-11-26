@@ -17,8 +17,10 @@ import (
 	"github.com/meddleware-org/registry-auth-proxy/internal/token"
 )
 
+// catalogScope is the scope the stalling upstream offers in its challenge.
 const catalogScope = "registry:catalog:*"
 
+// TestDefaultLimits pins the production bounds (5 s dial, 30 s response header, 64 in flight) so a change is deliberate.
 func TestDefaultLimits(t *testing.T) {
 	lim := defaultLimits()
 	if lim.dialTimeout != 5*time.Second || lim.responseHeaderTimeout != 30*time.Second || lim.maxInFlight != 64 {
@@ -60,6 +62,7 @@ type stallingUpstream struct {
 // free lets every stalled handler return.
 func (u *stallingUpstream) free() { u.once.Do(func() { close(u.release) }) }
 
+// newStallingUpstream starts a registry that stalls (never answers) until freed, optionally already on the unauthenticated probe.
 func newStallingUpstream(t *testing.T, stallProbe bool) *stallingUpstream {
 	t.Helper()
 	u := &stallingUpstream{release: make(chan struct{})}
@@ -86,6 +89,7 @@ func newStallingUpstream(t *testing.T, stallProbe bool) *stallingUpstream {
 	return u
 }
 
+// shortLimits returns small bounds (one in flight, 200 ms header deadline) so the deadlines are exercised quickly.
 func shortLimits() limits {
 	return limits{dialTimeout: time.Second, responseHeaderTimeout: 200 * time.Millisecond, maxInFlight: 1}
 }

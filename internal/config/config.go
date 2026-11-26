@@ -90,6 +90,9 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse TOKEN_REFRESH_MARGIN %q: %w", marginStr, err)
 	}
+	if margin < 0 {
+		return nil, fmt.Errorf("TOKEN_REFRESH_MARGIN must not be negative, got %s", margin)
+	}
 	cfg.RefreshMargin = margin
 
 	// Trim trailing slash from upstream URL to keep path joining consistent.
@@ -115,16 +118,20 @@ func ReadSecret(path string) (string, error) {
 
 // validateHTTPURL rejects a value that is not a well-formed http(s) URL with a host. It does not
 // require https: both configured endpoints are in-cluster ClusterIP services reached over http.
+//
+// The errors name the variable and what is wrong, never the value (and not its scheme either, because a mistyped
+// "user:password@host" parses with "user" as the scheme): a configured URL can carry a user name, password or key,
+// and the message reaches the container log (CONF lens).
 func validateHTTPURL(name, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("invalid %s %q: %w", name, raw, err)
+		return fmt.Errorf("invalid %s: not a valid URL", name)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("%s must be an http(s) URL, got scheme %q in %q", name, u.Scheme, raw)
+		return fmt.Errorf("%s must be an http(s) URL", name)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("%s must include a host: %q", name, raw)
+		return fmt.Errorf("%s must include a host", name)
 	}
 	return nil
 }

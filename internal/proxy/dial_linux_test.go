@@ -50,6 +50,7 @@ func saturatedListener(t *testing.T) string {
 	return ""
 }
 
+// TestLimits_DialDeadlineEndsInBadGateway checks an upstream that never accepts the connection ends in 502 at the dial deadline (Linux only: it needs a non-routable local address).
 func TestLimits_DialDeadlineEndsInBadGateway(t *testing.T) {
 	buf := captureLog(t)
 	addr := saturatedListener(t)

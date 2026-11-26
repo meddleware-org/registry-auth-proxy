@@ -1,3 +1,5 @@
+// fetcher.go gets tokens from the registry token service with the client credentials, classifies failures without leaking the endpoint or the secret, and re-reads a rotated secret.
+
 package token
 
 import (
@@ -45,7 +47,10 @@ type FetchError struct {
 	err    error
 }
 
+// Error returns the message, which never contains the endpoint or the client secret.
 func (e *FetchError) Error() string { return e.msg }
+
+// Unwrap returns the underlying error for errors.Is and errors.As; it is not logged.
 func (e *FetchError) Unwrap() error { return e.err }
 
 // FailureClass names the class of a failed fetch ("timeout", "canceled", "unreachable", "status",
@@ -117,6 +122,7 @@ func (f *Fetcher) WithSecretReload(reload func() (string, error)) *Fetcher {
 	return f
 }
 
+// currentSecret returns the client secret under the read lock, so a reload and a fetch never race.
 func (f *Fetcher) currentSecret() string {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -131,6 +137,7 @@ func (f *Fetcher) refreshSecret(used string) (string, bool) {
 	if f.secret != used { // another request already picked up the new value
 		return f.secret, true
 	}
+	// Read the file again; the error is reported by class only, never the path or content.
 	next, err := f.reload()
 	if err != nil {
 		slog.Warn("client secret file could not be re-read", "cause", "unreadable")
@@ -149,6 +156,7 @@ func (f *Fetcher) refreshSecret(used string) (string, bool) {
 func (f *Fetcher) Fetch(ctx context.Context, service, scope string) (tok string, expiry time.Time, err error) {
 	used := f.currentSecret()
 	tok, expiry, err = f.attempt(ctx, service, scope, used)
+	// A 401 can mean the mounted secret was rotated: re-read it once and retry with the new value before reporting failure.
 	if err != nil && f.reload != nil && FailureStatus(err) == http.StatusUnauthorized {
 		if next, ok := f.refreshSecret(used); ok {
 			return f.attempt(ctx, service, scope, next)
@@ -157,6 +165,7 @@ func (f *Fetcher) Fetch(ctx context.Context, service, scope string) (tok string,
 	return tok, expiry, err
 }
 
+// attempt makes one token request with the given secret and returns the token and its expiry, or a FetchError that classifies the failure.
 func (f *Fetcher) attempt(ctx context.Context, service, scope, secret string) (tok string, expiry time.Time, err error) {
 	// The request URL is the configured endpoint with service and scope set on its query, so an endpoint
 	// that already carries query parameters stays well-formed (they are kept; ours win on a clash).
@@ -164,6 +173,7 @@ func (f *Fetcher) attempt(ctx context.Context, service, scope, secret string) (t
 	if err != nil {
 		return "", time.Time{}, &FetchError{class: classRequest, msg: "build token request", err: err}
 	}
+	// Set service and scope on the query; with no scope (the /v2/ ping) any scope the endpoint carried is removed.
 	params := u.Query()
 	params.Set("service", service)
 	if scope != "" {
@@ -177,6 +187,7 @@ func (f *Fetcher) attempt(ctx context.Context, service, scope, secret string) (t
 	if err != nil {
 		return "", time.Time{}, &FetchError{class: classRequest, msg: "build token request", err: err}
 	}
+	// The client authenticates with HTTP Basic credentials; the secret is passed in, not read from shared state, so a retry can use a reloaded one.
 	req.SetBasicAuth(f.clientID, secret)
 
 	resp, err := f.client.Do(req)
@@ -185,6 +196,7 @@ func (f *Fetcher) attempt(ctx context.Context, service, scope, secret string) (t
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// The response is capped at 64 KiB: a token response is a few hundred bytes, so anything larger is hostile or broken.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
 		return "", time.Time{}, transportError(err)

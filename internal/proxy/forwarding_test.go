@@ -42,11 +42,13 @@ func recordingUpstream(t *testing.T, respond func(http.Header)) (*httptest.Serve
 	return srv, func() http.Header { mu.Lock(); defer mu.Unlock(); return last }
 }
 
+// TestForward_RequestFieldPolicy checks which request fields reach the registry: the allowlisted ones pass, the caller's credentials and hop-by-hop fields never do.
 func TestForward_RequestFieldPolicy(t *testing.T) {
 	srv, got := recordingUpstream(t, nil)
 	h := newTestHandler(t, srv.URL, "proxy-token")
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil)
+	// A request as a browser behind the edge might send it: its own credentials, a cookie, a Proxy-Authorization and a Connection header naming two more fields.
 	req.Header.Set("Authorization", "Bearer client-supplied")
 	req.Header.Set("Cookie", "session=abc")
 	req.Header.Set("Connection", "keep-alive, X-Secret-Hop, x-other")
@@ -60,10 +62,12 @@ func TestForward_RequestFieldPolicy(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 
+	// What the registry actually received, recorded by the upstream double.
 	up := got()
 	if auth := up.Values("Authorization"); len(auth) != 1 || auth[0] != "Bearer proxy-token" {
 		t.Errorf("Authorization = %v, want only the proxy's own token (replaced, never appended)", auth)
 	}
+	// None of the caller's own secrets, nor the fields the Connection header named, may reach the registry.
 	for _, name := range []string{"Cookie", "X-Secret-Hop", "X-Other", "Proxy-Authorization"} {
 		if v := up.Get(name); v != "" {
 			t.Errorf("%s reached the registry: %q", name, v)
@@ -72,18 +76,22 @@ func TestForward_RequestFieldPolicy(t *testing.T) {
 	if up.Get("Accept") != "application/json" {
 		t.Errorf("an ordinary field (Accept) was not forwarded")
 	}
+	// The proxy marks what it forwards so a request that loops back to it can be recognised (the next test).
 	if via := up.Get("Via"); !strings.Contains(via, "registry-auth-proxy") {
 		t.Errorf("Via = %q, want the proxy's loop marker", via)
 	}
 }
 
+// TestForward_ResponseFieldPolicy checks the response fields the UI must not see (cookies, upstream CORS grants) are dropped.
 func TestForward_ResponseFieldPolicy(t *testing.T) {
 	srv, _ := recordingUpstream(t, func(h http.Header) {
+		// An upstream response that tries to widen who may read it, set a cookie and leak an internal field through Connection.
 		h.Set("Access-Control-Allow-Origin", "*")
 		h.Set("Access-Control-Allow-Credentials", "true")
 		h.Set("Set-Cookie", "a=b")
 		h.Set("Connection", "X-Internal")
 		h.Set("X-Internal", "topology")
+		// Ordinary registry fields that the UI needs and that must pass through untouched.
 		h.Set("Docker-Distribution-Api-Version", "registry/2.0")
 		h.Set("Content-Type", "application/json")
 	})
@@ -91,6 +99,7 @@ func TestForward_ResponseFieldPolicy(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil))
 
+	// The dropped fields must be absent from what the UI receives.
 	for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials", "Set-Cookie", "X-Internal", "Connection"} {
 		if v := rec.Header().Get(name); v != "" {
 			t.Errorf("%s reached the UI: %q", name, v)
@@ -103,20 +112,24 @@ func TestForward_ResponseFieldPolicy(t *testing.T) {
 	}
 }
 
+// TestForward_LoopIsRefusedBeforeAnyUpstreamCall checks a request that would loop back through the proxy is refused before any upstream call is made.
 func TestForward_LoopIsRefusedBeforeAnyUpstreamCall(t *testing.T) {
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
 	defer srv.Close()
 	h := newTestHandler(t, srv.URL, "t")
 	req := httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil)
+	// A request that already carries the proxy's own Via marker came back through it.
 	req.Header.Set("Via", "1.1 registry-auth-proxy")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	// 508 Loop Detected, and the upstream was never contacted.
 	if rec.Code != http.StatusLoopDetected || hits != 0 {
 		t.Fatalf("status %d, upstream hits %d; want 508 and no upstream call", rec.Code, hits)
 	}
 }
 
+// TestForward_ConcurrencyIsBounded checks no more than the configured number of requests are in flight at once, and that the rest are answered 503 instead of queueing.
 func TestForward_ConcurrencyIsBounded(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, DefaultMaxInFlight+8)
@@ -132,6 +145,7 @@ func TestForward_ConcurrencyIsBounded(t *testing.T) {
 	}))
 	defer srv.Close()
 	h := newTestHandler(t, srv.URL, "t")
+	// Prime the token cache so every forward goes straight to the upstream and is held open there.
 	// Prime the token cache so every forward holds the upstream open.
 	h.cache.Set("registry:catalog:*", "t", time.Now().Add(time.Hour))
 
@@ -145,6 +159,7 @@ func TestForward_ConcurrencyIsBounded(t *testing.T) {
 	}
 	for i := 0; i < DefaultMaxInFlight; i++ {
 		select {
+		// Wait until every held request has reached the upstream, so the bound is full before the next request.
 		case <-started:
 		case <-time.After(10 * time.Second):
 			t.Fatal("forwards did not start")
@@ -152,9 +167,11 @@ func TestForward_ConcurrencyIsBounded(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2/_catalog", nil))
+	// Past the bound the proxy answers 503 with Retry-After instead of queueing (queued requests would hold memory).
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
 		t.Errorf("request past the bound: status %d retry-after %q, want 503 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
 	}
+	// Let the held requests finish; the slots must come back.
 	close(release)
 	wg.Wait()
 	rec = httptest.NewRecorder()
@@ -164,11 +181,13 @@ func TestForward_ConcurrencyIsBounded(t *testing.T) {
 	}
 }
 
+// TestForward_UpstreamFailureLogsNoHostname checks a failing upstream is logged by its class only, never its hostname.
 func TestForward_UpstreamFailureLogsNoHostname(t *testing.T) {
 	buf := captureLog(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	upstreamURL := srv.URL
+	// The upstream is gone, so the forward fails; its address is exactly what must not leak.
 	srv.Close() // unreachable
 	h := newTestHandler(t, upstreamURL, "t")
 	rec := httptest.NewRecorder()
@@ -176,6 +195,7 @@ func TestForward_UpstreamFailureLogsNoHostname(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status %d, want 502", rec.Code)
 	}
+	// Neither the log nor the body may contain the upstream's host and port.
 	host := strings.TrimPrefix(upstreamURL, "http://")
 	if strings.Contains(buf.String(), host) || strings.Contains(rec.Body.String(), host) {
 		t.Errorf("the upstream address leaked:\nlog: %s\nbody: %s", buf.String(), rec.Body.String())

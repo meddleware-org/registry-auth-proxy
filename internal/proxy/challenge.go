@@ -38,12 +38,14 @@ func parseBearerChallenge(header string) (service, scope string) {
 // backslash escapes) or a bare token ending at a comma — and returns it with the remainder.
 func readParamValue(s string) (value, rest string) {
 	if !strings.HasPrefix(s, `"`) {
+		// A bare token runs to the next comma.
 		end := strings.IndexByte(s, ',')
 		if end < 0 {
 			return strings.TrimSpace(s), ""
 		}
 		return strings.TrimSpace(s[:end]), s[end:]
 	}
+	// A quoted string: copy characters, honouring backslash escapes, until the closing quote.
 	var b strings.Builder
 	for i := 1; i < len(s); i++ {
 		switch c := s[i]; {
@@ -65,17 +67,21 @@ func readParamValue(s string) (value, rest string) {
 // refused, so the proxy never requests a token broader than the browser UI needs.
 func readOnlyScope(scope string) bool {
 	for _, one := range strings.Fields(scope) {
+		// The catalog is read-only.
 		if one == "registry:catalog:*" {
 			continue
 		}
+		// Anything that is not the catalog must be a repository scope.
 		name, ok := strings.CutPrefix(one, "repository:")
 		if !ok {
 			return false
 		}
+		// The action follows the last colon, and only pull is read-only.
 		cut := strings.LastIndexByte(name, ':')
 		if cut <= 0 || name[cut+1:] != "pull" {
 			return false
 		}
+		// Whitespace inside a name would smuggle a second scope into the list.
 		if strings.ContainsAny(name[:cut], " \t\r\n") {
 			return false
 		}

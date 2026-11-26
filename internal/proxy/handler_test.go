@@ -1,3 +1,6 @@
+// Tests for the proxy handler: the challenge parser, the scope policy, the token and cache flow on a 401, and the status mapping, against httptest
+// registries and token services.
+
 package proxy
 
 import (
@@ -14,6 +17,7 @@ import (
 	"github.com/meddleware-org/registry-auth-proxy/internal/token"
 )
 
+// TestParseBearerChallenge checks the WWW-Authenticate parser: quoted values with commas and escaped quotes, token values, other schemes and malformed input.
 func TestParseBearerChallenge(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -88,6 +92,7 @@ func TestParseBearerChallenge(t *testing.T) {
 	}
 }
 
+// TestIsHopByHop checks the connection-scoped fields are recognised, case-insensitively, including those the Connection header names.
 func TestIsHopByHop(t *testing.T) {
 	for _, h := range []string{"Connection", "connection", "Transfer-Encoding", "Upgrade"} {
 		if !isHopByHop(h) {
@@ -487,6 +492,7 @@ func TestServeHTTP_RefusedTokenIsDropped(t *testing.T) {
 	}
 }
 
+// TestReadOnlyScope checks only pull and catalog scopes are acceptable: any push, delete or wildcard action is refused.
 func TestReadOnlyScope(t *testing.T) {
 	for scope, want := range map[string]bool{
 		"":                                    true,

@@ -1,3 +1,5 @@
+// flight.go collapses concurrent token fetches for one scope into a single request to the token service.
+
 package token
 
 import (
@@ -29,16 +31,19 @@ func (f *Flight) Do(key string, fn func() (string, time.Time, error)) (string, t
 	if f.calls == nil {
 		f.calls = make(map[string]*call)
 	}
+	// Another caller is already fetching this key: wait for its result instead of asking the token service again.
 	if c, ok := f.calls[key]; ok {
 		f.mu.Unlock()
 		c.wg.Wait()
 		return c.tok, c.exp, c.err
 	}
+	// This caller is first: it runs the fetch and publishes the result to anyone who joins meanwhile.
 	c := &call{}
 	c.wg.Add(1)
 	f.calls[key] = c
 	f.mu.Unlock()
 
+	// Remove the call before waking the waiters, so the next request after this one starts a fresh fetch.
 	defer func() {
 		f.mu.Lock()
 		delete(f.calls, key)

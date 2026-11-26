@@ -1,3 +1,5 @@
+// scope.go is the proxy's route allowlist: which read paths of the registry API it will forward with its credential, and the OCI token scope each needs.
+
 package proxy
 
 import (
@@ -35,11 +37,13 @@ var routeRules = []struct {
 	{regexp.MustCompile(`^/v2/(` + nameGrammar + `)/referrers/` + digestGrammar + `$`), pullScope},
 }
 
+// pullScope returns the OCI pull scope for a repository name.
 func pullScope(name string) string { return "repository:" + name + ":pull" }
 
 // RouteStatus is the outcome of checking a request path against the route allowlist.
 type RouteStatus int
 
+// The outcomes of Route.
 const (
 	// RouteOK: the path is a canonical read route of the registry API.
 	RouteOK RouteStatus = iota

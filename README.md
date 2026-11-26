@@ -94,14 +94,14 @@ NGINX_PROXY_PASS_URL=http://registry-auth-proxy:8181
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `PORT` | no | `8181` | HTTP listen port |
-| `UPSTREAM_URL` | **yes** | — | Distribution registry base URL (e.g. `http://registry:5000`) |
-| `TOKEN_ENDPOINT` | **yes** | — | Registry token service `GET /token` URL (internal; bypasses any public tunnel) |
+| `UPSTREAM_URL` | **yes** | — | Distribution registry base URL (e.g. `http://registry:5000`); `http` or `https` with a host |
+| `TOKEN_ENDPOINT` | **yes** | — | Registry token service `GET /token` URL (internal; bypasses any public tunnel); `http` or `https` with a host |
 | `CLIENT_ID` | no | `registry-browser` | Hydra `client_id` used for Basic auth to the token service |
 | `CLIENT_SECRET_FILE` | **yes** | — | Path to a file containing the client secret (mounted from a Secret; never an inline env var) |
-| `TOKEN_REFRESH_MARGIN` | no | `30s` | Evict cached tokens this long before their stated expiry |
+| `TOKEN_REFRESH_MARGIN` | no | `30s` | Evict cached tokens this long before their stated expiry (a duration, not negative) |
 | `LOG_LEVEL` | no | `info` | `debug \| info \| warn \| error` |
 
-See [.env.example](.env.example) for a copy-paste template.
+See [.env.example](.env.example) for a copy-paste template. A rejected URL is reported by its variable name only, never its value: a configured URL can carry a credential, and the message reaches the container log.
 
 ## Endpoints
 
@@ -164,8 +164,8 @@ fails if they are empty (the legacy builder does not set them).
 
 ## Contributing / development
 
-See [AGENTS.md](AGENTS.md) for the package layout, request-flow detail, and testing
-recipes, and [CLAUDE.md](CLAUDE.md) for the architectural invariants. CI runs
+See [CONTRIBUTING.md](CONTRIBUTING.md) to build, test and propose a change, and
+[CLAUDE.md](CLAUDE.md) for the package layout, request-flow detail, testing recipes and the architectural invariants. CI runs
 `golangci-lint`, `go vet`, race tests, `govulncheck`, a Trivy filesystem scan and the image
 notices check; all
 must pass before a `v*` tag triggers a signed multi-registry release.

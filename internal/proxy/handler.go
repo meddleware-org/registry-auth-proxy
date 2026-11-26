@@ -85,6 +85,7 @@ type limits struct {
 	maxInFlight           int
 }
 
+// defaultLimits returns the production bounds: the dial, response-header and in-flight limits named above.
 func defaultLimits() limits {
 	return limits{
 		dialTimeout:           upstreamDialTimeout,
@@ -141,6 +142,7 @@ func NewHandler(upstreamURL string, cache *token.Cache, fetcher *token.Fetcher) 
 	return newHandler(upstreamURL, cache, fetcher, defaultLimits())
 }
 
+// newHandler builds a Handler with explicit limits; NewHandler uses the defaults and the tests pass short ones.
 func newHandler(upstreamURL string, cache *token.Cache, fetcher *token.Fetcher, lim limits) *Handler {
 	u, _ := url.Parse(upstreamURL) // already validated in config.Load
 	return &Handler{
@@ -388,6 +390,7 @@ func connectionNamed(h http.Header) map[string]bool {
 	return out
 }
 
+// isDropped reports whether name is in list, comparing field names case-insensitively as HTTP requires.
 func isDropped(name string, list []string) bool {
 	for _, d := range list {
 		if strings.EqualFold(name, d) {

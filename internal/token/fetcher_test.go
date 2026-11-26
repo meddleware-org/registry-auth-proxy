@@ -1,3 +1,5 @@
+// Tests for the token fetcher: the request it sends, the response it accepts, how each failure is classified, secret rotation, and that nothing secret is logged.
+
 package token
 
 import (
@@ -14,16 +16,20 @@ import (
 	"time"
 )
 
+// serve starts a token service double that answers with the given status and body, runs check on each request, and returns a Fetcher pointed at it.
 func serve(t *testing.T, status int, body string, check func(*http.Request)) *Fetcher {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The caller's assertions about the request run inside the handler, where the request is visible.
 		if check != nil {
 			check(r)
 		}
+		// The double answers every request with the status and body the test chose.
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
+	// The fetcher under test points at the double with fixed client credentials.
 	return NewFetcher(srv.URL+"/token", "proxy", "s3cret")
 }
 
@@ -173,12 +179,15 @@ type rotatingService struct {
 	calls    atomic.Int32
 }
 
+// newRotatingService starts a token service that accepts only one password at a time, so a test can rotate the secret.
 func newRotatingService(t *testing.T, accepted string) *rotatingService {
 	t.Helper()
+	// The service starts accepting one password and counts calls.
 	rs := &rotatingService{}
 	rs.accepted.Store(accepted)
 	rs.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rs.calls.Add(1)
+		// Anything but the currently accepted password is a 401, like a token service after a rotation.
 		if _, pass, ok := r.BasicAuth(); !ok || pass != rs.accepted.Load().(string) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -189,9 +198,12 @@ func newRotatingService(t *testing.T, accepted string) *rotatingService {
 	return rs
 }
 
+// captureSlog redirects the default logger into a buffer for the test, so the test can assert what was (and was not) logged.
 func captureSlog(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	// A JSON handler writing to a buffer, so the test can search the log lines.
 	var buf bytes.Buffer
+	// Remember the process default so the test restores it when it ends.
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
