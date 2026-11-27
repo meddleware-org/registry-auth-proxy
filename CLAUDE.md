@@ -150,6 +150,10 @@ cap are set so large blob downloads stream without being cut off; the token fetc
 - `scripts/third-party-licenses.sh` and `scripts/check-image-notices.sh` produce and check the licence
   notices shipped in the image (`/usr/share/doc/registry-auth-proxy/`); CI runs the check.
 
+## Documentation rules (workspace documentation standard, D144)
+
+Every file has a header and every identifier a doc comment that starts with its name (the `revive` rules in `.golangci.yml` enforce the exported ones in CI); line comments say why. `node scripts/check-docs.mjs --report registry-auth-proxy` (in the workspace repository) is the gate. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## What not to do
 
 - Do not add push support. This proxy is read-only (pull + catalog).
